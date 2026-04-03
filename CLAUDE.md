@@ -47,7 +47,7 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 
 按顺序交付，每个子计划独立可测试：
 
-- [ ] **Plan 1**：基础设施 + 飞书消息跑通（项目初始化、OpenClaw 安装、飞书 Bot Hello World）
+- [x] **Plan 1**：基础设施 + 飞书消息跑通（项目初始化、OpenClaw 安装、飞书 Bot Hello World）
 - [ ] **Plan 2**：Router Agent + Socratic Agent（意图分类 + 核心追问逻辑）
 - [ ] **Plan 3**：Writer Agent + Obsidian 写入（笔记生成 + 文件系统操作）
 - [ ] **Plan 4**：crucible.db 评估入库 + /stats 统计指令
