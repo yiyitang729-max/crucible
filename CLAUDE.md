@@ -50,7 +50,7 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 - [x] **Plan 1**：基础设施 + 飞书消息跑通（项目初始化、OpenClaw 安装、飞书 Bot Hello World）
 - [x] **Plan 2**：Router Agent + Socratic Agent（意图分类 + 核心追问逻辑）
 - [x] **Plan 3**：Writer Agent + Obsidian 写入（笔记生成 + 飞书 API 同步到 Obsidian）
-- [ ] **Plan 4**：crucible.db 评估入库 + /stats 统计指令
+- [x] **Plan 4**：crucible.db 评估入库 + /stats 统计指令
 
 ## 遗留问题（不影响开发启动）
 
