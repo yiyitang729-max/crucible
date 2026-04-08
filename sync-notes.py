@@ -33,6 +33,7 @@ DB_PATH = VAULT_PATH / "crucible.db"
 SSH_KEY = "/Users/tracy_t/Downloads/openclaw_0404.pem"
 REMOTE_HOST = "ubuntu@106.54.167.30"
 REMOTE_STATS = "/root/.openclaw/workspace/STATS.md"
+REMOTE_TAG_INDEX = "/root/.openclaw/workspace/TAG_INDEX.json"
 
 
 # ── 飞书 API ─────────────────────────────────────────
@@ -134,17 +135,28 @@ def parse_note(text, msg_id, create_time_ms):
     scene_match = re.search(r"个人应用场景\s*\n(.+?)(?:\n|$)", text)
     scene = scene_match.group(1).strip() if scene_match else "待补充"
 
+    # 标签（V2 新增）
+    tags_match = re.search(r"标签[：:]\s*(.+?)(?:\n|$)", text)
+    if tags_match:
+        tags = [t.strip() for t in tags_match.group(1).split(",") if t.strip()]
+    else:
+        tags = []
+
     closing_match = re.search(r"洞察是[：:]\s*(.+?)(?:[。\n]|$)", text)
     title_insight = closing_match.group(1).strip() if closing_match else insight
 
     slug = re.sub(r"[^\w\u4e00-\u9fff]+", "-", title_insight)[:30].strip("-")
     filename = f"{date}-{slug}.md"
 
+    # 构建 Obsidian tags（crucible + 语义标签）
+    all_tags = ["crucible"] + [t for t in tags if t != "crucible"]
+    tags_yaml = ", ".join(all_tags)
+
     md = f"""---
 date: {date}
 type: insight
 source: 飞书对话
-tags: [crucible]
+tags: [{tags_yaml}]
 feishu_msg_id: {msg_id}
 ---
 
@@ -167,6 +179,8 @@ feishu_msg_id: {msg_id}
         "insight": insight,
         "trigger": trigger,
         "scene": scene,
+        "tags": tags,
+        "title": title_insight,
     }
 
 
@@ -288,6 +302,14 @@ def init_db():
             searched_hit    INTEGER DEFAULT 0
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS note_tags (
+            note_id   TEXT,
+            tag       TEXT,
+            tag_type  TEXT,
+            PRIMARY KEY (note_id, tag)
+        )
+    """)
     conn.commit()
     return conn
 
@@ -316,6 +338,101 @@ def upsert_note(conn, note_id, created_at):
         VALUES (?, ?)
         ON CONFLICT(note_id) DO NOTHING
     """, (note_id, created_at))
+
+
+def upsert_tags(conn, note_id, tags):
+    """写入笔记标签。"""
+    for tag in tags:
+        conn.execute("""
+            INSERT INTO note_tags (note_id, tag, tag_type)
+            VALUES (?, ?, 'topic')
+            ON CONFLICT(note_id, tag) DO NOTHING
+        """, (note_id, tag))
+
+
+def build_tag_index(conn):
+    """从 DB 构建标签索引。"""
+    rows = conn.execute("""
+        SELECT nt.tag, nt.note_id, nm.created_at
+        FROM note_tags nt
+        LEFT JOIN note_metrics nm ON nt.note_id = nm.note_id
+        ORDER BY nt.tag, nm.created_at DESC
+    """).fetchall()
+
+    tags = {}
+    for tag, note_id, _ in rows:
+        tags.setdefault(tag, []).append(note_id)
+
+    # 也收集每条笔记的信息
+    notes = {}
+    note_rows = conn.execute("""
+        SELECT nm.note_id, nm.created_at, GROUP_CONCAT(nt.tag, ', ')
+        FROM note_metrics nm
+        LEFT JOIN note_tags nt ON nm.note_id = nt.note_id
+        GROUP BY nm.note_id
+    """).fetchall()
+    for note_id, created_at, tag_str in note_rows:
+        notes[note_id] = {
+            "created_at": created_at or "",
+            "tags": [t.strip() for t in (tag_str or "").split(",") if t.strip()],
+        }
+
+    return {"tags": tags, "notes": notes}
+
+
+def find_related_notes(conn, note_id, min_overlap=2, max_results=3):
+    """找到标签重合最多的其他笔记。"""
+    # 获取当前笔记的标签
+    current_tags = [r[0] for r in conn.execute(
+        "SELECT tag FROM note_tags WHERE note_id = ?", (note_id,)
+    ).fetchall()]
+
+    if not current_tags:
+        return []
+
+    placeholders = ",".join("?" * len(current_tags))
+    rows = conn.execute(f"""
+        SELECT note_id, COUNT(*) as overlap
+        FROM note_tags
+        WHERE tag IN ({placeholders}) AND note_id != ?
+        GROUP BY note_id
+        HAVING overlap >= ?
+        ORDER BY overlap DESC
+        LIMIT ?
+    """, current_tags + [note_id, min_overlap, max_results]).fetchall()
+
+    return [(note_id, overlap) for note_id, overlap in rows]
+
+
+def upload_file_to_server(local_content, remote_path):
+    """上传文件内容到服务器。"""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(local_content)
+        tmp_path = f.name
+
+    try:
+        subprocess.run([
+            "scp", "-i", SSH_KEY,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "IdentitiesOnly=yes",
+            tmp_path, f"{REMOTE_HOST}:/tmp/crucible-upload",
+        ], capture_output=True, timeout=10)
+        subprocess.run([
+            "ssh", "-i", SSH_KEY,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "IdentitiesOnly=yes",
+            REMOTE_HOST,
+            f"sudo cp /tmp/crucible-upload {remote_path}",
+        ], capture_output=True, timeout=10)
+        return True
+    except Exception as e:
+        print(f"⚠ 上传失败: {e}")
+        return False
+    finally:
+        os.unlink(tmp_path)
 
 
 # ── 同步状态 ──────────────────────────────────────────
@@ -532,8 +649,92 @@ def sync():
             note_count += 1
 
     conn.commit()
-    conn.close()
     print(f"✓ 写入 {conv_count} 条对话指标，{note_count} 条笔记指标")
+
+    # ── 标签入库（V2）──
+    print("\n处理标签...")
+    tag_count = 0
+    for msg_id, filename, md, note_fields in new_notes:
+        tags = note_fields.get("tags", [])
+        if tags:
+            upsert_tags(conn, msg_id, tags)
+            tag_count += len(tags)
+    # 也处理已有笔记（回填旧笔记的标签，从文件中读取）
+    existing_notes = list(NOTE_DIR.glob("*.md"))
+    for note_path in existing_notes:
+        content = note_path.read_text(encoding="utf-8")
+        # 从 YAML frontmatter 提取 tags
+        fm_match = re.search(r"^---\n(.*?)\n---", content, re.DOTALL)
+        if fm_match:
+            fm = fm_match.group(1)
+            tags_line = re.search(r"tags:\s*\[(.+?)\]", fm)
+            if tags_line:
+                tags = [t.strip() for t in tags_line.group(1).split(",") if t.strip() and t.strip() != "crucible"]
+                msg_id_match = re.search(r"feishu_msg_id:\s*(\S+)", fm)
+                if msg_id_match and tags:
+                    upsert_tags(conn, msg_id_match.group(1), tags)
+    conn.commit()
+    print(f"✓ 处理 {tag_count} 个新标签")
+
+    # ── 构建 TAG_INDEX + 上传 ──
+    tag_index = build_tag_index(conn)
+    tag_index_json = json.dumps(tag_index, ensure_ascii=False, indent=2)
+    print(f"✓ TAG_INDEX: {len(tag_index['tags'])} 个标签，{len(tag_index['notes'])} 条笔记")
+
+    if upload_file_to_server(tag_index_json, REMOTE_TAG_INDEX):
+        print("✓ TAG_INDEX.json 已上传到服务器")
+
+    # ── 关联笔记（双链）──
+    print("\n计算笔记关联...")
+    link_updates = 0
+    for note_path in NOTE_DIR.glob("*.md"):
+        content = note_path.read_text(encoding="utf-8")
+        fm_match = re.search(r"feishu_msg_id:\s*(\S+)", content)
+        if not fm_match:
+            continue
+        note_id = fm_match.group(1)
+
+        related = find_related_notes(conn, note_id)
+        if not related:
+            continue
+
+        # 构建关联章节
+        links = []
+        for related_id, overlap in related:
+            # 找到对应的文件名
+            for other_path in NOTE_DIR.glob("*.md"):
+                other_content = other_path.read_text(encoding="utf-8")
+                if related_id in other_content:
+                    link_name = other_path.stem
+                    # 获取标题
+                    title_match = re.search(r"^# (.+)$", other_content, re.MULTILINE)
+                    title = title_match.group(1) if title_match else link_name
+                    links.append(f"- [[{link_name}]] — {title}")
+                    break
+
+        if not links:
+            continue
+
+        link_section = "\n## 关联笔记\n" + "\n".join(links) + "\n"
+
+        # 如果已有关联章节，替换；否则追加
+        if "## 关联笔记" in content:
+            content = re.sub(r"\n## 关联笔记\n.*?(?=\n## |\Z)", link_section, content, flags=re.DOTALL)
+        else:
+            content = content.rstrip() + "\n" + link_section
+
+        note_path.write_text(content, encoding="utf-8")
+        link_updates += 1
+
+        # 更新 linked_count
+        conn.execute(
+            "UPDATE note_metrics SET linked_count = ? WHERE note_id = ?",
+            (len(related), note_id)
+        )
+
+    conn.commit()
+    conn.close()
+    print(f"✓ 更新 {link_updates} 条笔记的关联")
 
     # ── 上传统计到服务器 ──
     stats_md = show_stats()
