@@ -310,6 +310,19 @@ def init_db():
             PRIMARY KEY (note_id, tag)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pending_digests (
+            id          TEXT PRIMARY KEY,
+            created_at  DATETIME,
+            content_url TEXT,
+            content_summary TEXT,
+            tags        TEXT,
+            status      TEXT DEFAULT 'pending',
+            reminded_at DATETIME,
+            digested_at DATETIME,
+            note_id     TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -482,6 +495,14 @@ def show_stats():
         FROM conversation_metrics WHERE created_at >= ?
     """, (month_ago,)).fetchone()[0]
 
+    # 待消化收藏
+    try:
+        pending_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_digests WHERE status = 'pending'"
+        ).fetchone()[0]
+    except sqlite3.OperationalError:
+        pending_count = 0
+
     conn.close()
 
     completion_rate = (completed / total * 100) if total > 0 else 0
@@ -506,20 +527,25 @@ def show_stats():
     print(f"【最近 30 天】")
     print(f"  活跃天数：{active_days}")
     print()
+    if pending_count > 0:
+        print(f"【待消化收藏】")
+        print(f"  {pending_count} 条内容等待深入聊")
+        print()
 
     # 生成 stats 文本用于上传到服务器
     stats_md = generate_stats_md(
         total, completed, completion_rate, has_app, app_rate,
         avg_turns, total_notes, week_total, week_completed,
-        week_comp_rate, week_app, active_days,
+        week_comp_rate, week_app, active_days, pending_count,
     )
     return stats_md
 
 
 def generate_stats_md(total, completed, comp_rate, has_app, app_rate,
                       avg_turns, total_notes, week_total, week_completed,
-                      week_comp_rate, week_app, active_days):
+                      week_comp_rate, week_app, active_days, pending_count=0):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    pending_line = f"\n\n【待消化收藏】{pending_count} 条" if pending_count > 0 else ""
     return f"""📊 Crucible 统计（更新于 {now}）
 
 【总览】
@@ -533,7 +559,7 @@ def generate_stats_md(total, completed, comp_rate, has_app, app_rate,
 - 对话：{week_total}，完成：{week_completed}（{week_comp_rate:.0f}%）
 - 有应用场景：{week_app}
 
-【最近 30 天活跃天数】{active_days}
+【最近 30 天活跃天数】{active_days}{pending_line}
 """
 
 
@@ -650,6 +676,41 @@ def sync():
 
     conn.commit()
     print(f"✓ 写入 {conv_count} 条对话指标，{note_count} 条笔记指标")
+
+    # ── 收藏识别 + 入库（V2 Plan 6）──
+    print("\n识别收藏内容...")
+    bookmark_count = 0
+    for conv_msgs in conversations:
+        bot_msgs_in_conv = [m for m in conv_msgs if is_bot_msg(m)]
+        user_msgs_in_conv = [m for m in conv_msgs if is_user_msg(m)]
+
+        for bm in bot_msgs_in_conv:
+            bot_text = extract_text(bm)
+            if "已加入待消化" in bot_text:
+                # 这是一个 bookmark 对话，找到对应的用户消息
+                conv_id = conv_msgs[0].get("message_id", "")
+                first_time = int(conv_msgs[0].get("create_time", "0"))
+                created_at = datetime.fromtimestamp(first_time / 1000).isoformat() if first_time else ""
+
+                # 提取用户发的 URL
+                user_text = extract_text(user_msgs_in_conv[0]) if user_msgs_in_conv else ""
+                url_match = re.search(r"https?://\S+", user_text)
+                content_url = url_match.group(0) if url_match else ""
+
+                # 提取 Bot 的摘要（「收到，已加入待消化。」之后的部分）
+                summary_match = re.search(r"已加入待消化[。.]\s*(.+?)$", bot_text)
+                content_summary = summary_match.group(1).strip() if summary_match else ""
+
+                conn.execute("""
+                    INSERT INTO pending_digests (id, created_at, content_url, content_summary, status)
+                    VALUES (?, ?, ?, ?, 'pending')
+                    ON CONFLICT(id) DO NOTHING
+                """, (conv_id, created_at, content_url, content_summary))
+                bookmark_count += 1
+                break
+
+    conn.commit()
+    print(f"✓ 识别 {bookmark_count} 条收藏内容")
 
     # ── 标签入库（V2）──
     print("\n处理标签...")
