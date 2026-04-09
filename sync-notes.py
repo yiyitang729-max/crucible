@@ -34,6 +34,7 @@ SSH_KEY = "/Users/tracy_t/Downloads/openclaw_0404.pem"
 REMOTE_HOST = "ubuntu@106.54.167.30"
 REMOTE_STATS = "/root/.openclaw/workspace/STATS.md"
 REMOTE_TAG_INDEX = "/root/.openclaw/workspace/TAG_INDEX.json"
+REMOTE_DIGEST_REPORT = "/root/.openclaw/workspace/DIGEST_REPORT.json"
 
 
 # ── 飞书 API ─────────────────────────────────────────
@@ -448,6 +449,80 @@ def upload_file_to_server(local_content, remote_path):
         os.unlink(tmp_path)
 
 
+def build_digest_report(conn):
+    """分析待消化收藏，按标签聚类，生成推荐报告。"""
+    rows = conn.execute("""
+        SELECT id, created_at, content_url, content_summary, tags
+        FROM pending_digests
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+    """).fetchall()
+
+    if not rows:
+        return None
+
+    # 按标签聚类
+    clusters = {}
+    items_list = []
+    for row_id, created_at, url, summary, tags_json in rows:
+        tags = json.loads(tags_json) if tags_json else []
+        age_days = (datetime.now() - datetime.fromisoformat(created_at)).days if created_at else 0
+
+        item = {
+            "id": row_id,
+            "url": url or "",
+            "summary": summary or "(无摘要)",
+            "age_days": age_days,
+            "tags": tags,
+        }
+        items_list.append(item)
+
+        # 用第一个 tag 作为聚类 key（如果有的话）
+        cluster_key = tags[0] if tags else "未分类"
+        clusters.setdefault(cluster_key, []).append(item)
+
+    # 找出和已有笔记最相关的待消化内容
+    for item in items_list:
+        if item["tags"]:
+            placeholders = ",".join("?" * len(item["tags"]))
+            related = conn.execute(f"""
+                SELECT DISTINCT nt.note_id
+                FROM note_tags nt
+                WHERE nt.tag IN ({placeholders})
+                LIMIT 3
+            """, item["tags"]).fetchall()
+            item["related_notes"] = [r[0] for r in related]
+        else:
+            item["related_notes"] = []
+
+    # 构建报告
+    report = {
+        "updated_at": datetime.now().isoformat(),
+        "pending_count": len(rows),
+        "clusters": [],
+    }
+
+    for theme, theme_items in sorted(clusters.items(), key=lambda x: -len(x[1])):
+        cluster = {
+            "theme": theme,
+            "count": len(theme_items),
+            "items": theme_items,
+        }
+        # 推荐理由
+        has_related = any(i["related_notes"] for i in theme_items)
+        oldest = max(i["age_days"] for i in theme_items)
+        if has_related:
+            cluster["recommendation"] = f"和你之前的笔记有关联，建议优先消化"
+        elif oldest > 7:
+            cluster["recommendation"] = f"已收藏 {oldest} 天，建议尽快消化"
+        else:
+            cluster["recommendation"] = ""
+
+        report["clusters"].append(cluster)
+
+    return report
+
+
 # ── 同步状态 ──────────────────────────────────────────
 def load_state():
     if STATE_FILE.exists():
@@ -794,8 +869,20 @@ def sync():
         )
 
     conn.commit()
-    conn.close()
     print(f"✓ 更新 {link_updates} 条笔记的关联")
+
+    # ── 生成收藏消化报告（V2 Plan 7）──
+    print("\n生成收藏消化报告...")
+    digest_report = build_digest_report(conn)
+    if digest_report:
+        report_json = json.dumps(digest_report, ensure_ascii=False, indent=2)
+        print(f"✓ DIGEST_REPORT: {digest_report['pending_count']} 条待消化，{len(digest_report['clusters'])} 个主题")
+        if upload_file_to_server(report_json, REMOTE_DIGEST_REPORT):
+            print("✓ DIGEST_REPORT.json 已上传到服务器")
+    else:
+        print("  没有待消化收藏。")
+
+    conn.close()
 
     # ── 上传统计到服务器 ──
     stats_md = show_stats()
@@ -806,8 +893,43 @@ def sync():
 def main():
     if "--stats" in sys.argv:
         show_stats()
+    elif "--pending" in sys.argv:
+        show_pending()
     else:
         sync()
+
+
+def show_pending():
+    """显示待消化收藏列表。"""
+    if not DB_PATH.exists():
+        print("还没有数据。先运行 python3 sync-notes.py 同步一次。")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        rows = conn.execute("""
+            SELECT id, created_at, content_url, content_summary
+            FROM pending_digests
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+        """).fetchall()
+    except sqlite3.OperationalError:
+        print("还没有收藏数据。")
+        return
+    finally:
+        conn.close()
+
+    if not rows:
+        print("没有待消化的收藏。")
+        return
+
+    print(f"📌 待消化收藏（{len(rows)} 条）\n")
+    for i, (row_id, created_at, url, summary) in enumerate(rows, 1):
+        date = created_at[:10] if created_at else "?"
+        print(f"  {i}. [{date}] {summary or url or '(无摘要)'}")
+        if url:
+            print(f"     {url}")
+        print()
 
 
 if __name__ == "__main__":

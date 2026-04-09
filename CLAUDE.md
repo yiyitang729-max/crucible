@@ -32,7 +32,7 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 ## 版本规划
 
 - **V1 MVP**：Capture → Distill → Organize（飞书接收 → Socratic 追问 → 写入 Obsidian + 评估入库）
-- **V2**：向量双链关联 + 知识检索 + 收藏唤起
+- **V2**：收藏加工器 + 标签关联 + 收藏唤起（标签系统取代向量库）
 - **V3**：Express 草稿生成（闭合 CODE 循环）
 
 ## 当前阶段
@@ -40,17 +40,22 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 - [x] 需求前讨论（2026-03-31）→ `需求前讨论记录.md`
 - [x] 脑暴记录（2026-04-02）→ `脑暴记录_2026-04-02.md`
 - [x] 正式设计文档 v0.2（2026-04-02）→ `设计文档_2026-04-02.md`
-- [ ] 实现计划（拆为 4 个子计划）← **当前位置**
-- [ ] 开发执行
+- [x] 实现计划
+- [x] V1 开发执行
+- [ ] V2 开发执行 ← **当前位置**
 
-## 下一步：实现计划（4 个子计划）
+## V1 实现计划（已完成）
 
-按顺序交付，每个子计划独立可测试：
-
-- [x] **Plan 1**：基础设施 + 飞书消息跑通（项目初始化、OpenClaw 安装、飞书 Bot Hello World）
-- [x] **Plan 2**：Router Agent + Socratic Agent（意图分类 + 核心追问逻辑）
-- [x] **Plan 3**：Writer Agent + Obsidian 写入（笔记生成 + 飞书 API 同步到 Obsidian）
+- [x] **Plan 1**：基础设施 + 飞书消息跑通
+- [x] **Plan 2**：Router Agent + Socratic Agent
+- [x] **Plan 3**：Writer Agent + Obsidian 写入
 - [x] **Plan 4**：crucible.db 评估入库 + /stats 统计指令
+
+## V2 实现计划
+
+- [x] **Plan 5**：标签系统 + 笔记关联基础（TAG_INDEX + Obsidian 双链）
+- [x] **Plan 6**：收藏入库（bookmark 路由 + pending_digests）
+- [x] **Plan 7**：收藏加工引擎（DIGEST_REPORT + /pending + /digest + HEARTBEAT 主动提醒）
 
 ## 遗留问题（不影响开发启动）
 
