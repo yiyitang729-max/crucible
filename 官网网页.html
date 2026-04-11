@@ -1,0 +1,2129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crucible — 不只帮你记住，更帮你想清楚</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Noto+Serif+SC:wght@400;600;700&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-deep: #08080a;
+  --bg-surface: #0e0e12;
+  --bg-elevated: #16161c;
+  --bg-card: #1a1a22;
+  --amber-100: #fef3e2;
+  --amber-200: #e8c49a;
+  --amber-300: #d4a574;
+  --amber-400: #c4894e;
+  --amber-500: #b87333;
+  --amber-glow: rgba(212, 165, 116, 0.15);
+  --amber-glow-strong: rgba(212, 165, 116, 0.3);
+  --text-primary: #e8e4df;
+  --text-secondary: #9a958e;
+  --text-muted: #5e5a55;
+  --border-subtle: rgba(232, 196, 154, 0.08);
+  --border-accent: rgba(212, 165, 116, 0.2);
+  --serif-zh: 'Noto Serif SC', 'Songti SC', serif;
+  --serif-en: 'Cormorant Garamond', 'Georgia', serif;
+  --sans: 'DM Sans', -apple-system, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+/* ===== Noise Texture Overlay ===== */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--amber-500); border-radius: 3px; }
+
+/* ===== Selection ===== */
+::selection { background: var(--amber-glow-strong); color: var(--amber-100); }
+
+/* ===== Layout ===== */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 clamp(24px, 5vw, 80px);
+}
+
+section {
+  padding: clamp(80px, 12vh, 160px) 0;
+  position: relative;
+}
+
+/* ===== Top Navigation (logo + CTA) ===== */
+nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 16px 0;
+  background: rgba(8, 8, 10, 0.85);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: all 0.4s ease;
+}
+
+nav .container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.nav-logo {
+  font-family: var(--serif-en);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--amber-200);
+  letter-spacing: 0.05em;
+  text-decoration: none;
+}
+
+/* Hide old horizontal nav links */
+.nav-links {
+  display: none;
+}
+
+.nav-cta-top {
+  padding: 8px 24px;
+  background: transparent;
+  border: 1px solid var(--amber-400);
+  color: var(--amber-200);
+  border-radius: 6px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+
+.nav-cta-top:hover {
+  background: var(--amber-glow);
+}
+
+/* ===== Side Navigation ===== */
+.side-nav {
+  position: fixed;
+  left: 28px;
+  top: 80px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  background: rgba(8, 8, 10, 0.9);
+  backdrop-filter: blur(16px);
+  padding: 16px 20px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+}
+
+.side-nav.visible {
+  opacity: 1;
+}
+
+.side-nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  text-decoration: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  transition: all 0.3s ease;
+  position: relative;
+  white-space: nowrap;
+}
+
+.side-nav a::before {
+  content: '';
+  width: 14px;
+  height: 1.5px;
+  background: var(--text-muted);
+  transition: all 0.3s ease;
+  flex-shrink: 0;
+}
+
+.side-nav a:hover {
+  color: var(--text-secondary);
+}
+
+.side-nav a:hover::before {
+  width: 22px;
+  background: var(--text-secondary);
+}
+
+.side-nav a.active {
+  color: var(--amber-200);
+}
+
+.side-nav a.active::before {
+  width: 24px;
+  background: var(--amber-400);
+  height: 2px;
+}
+
+@media (max-width: 1300px) {
+  .side-nav { display: none; }
+}
+
+/* ===== Hero ===== */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+  padding-top: 80px;
+}
+
+.hero-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.hero-bg::before {
+  content: '';
+  position: absolute;
+  top: -20%;
+  right: -10%;
+  width: 800px;
+  height: 800px;
+  background: radial-gradient(circle, rgba(184, 115, 51, 0.08) 0%, transparent 70%);
+  animation: breathe 8s ease-in-out infinite;
+}
+
+.hero-bg::after {
+  content: '';
+  position: absolute;
+  bottom: -30%;
+  left: -15%;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(212, 165, 116, 0.05) 0%, transparent 70%);
+  animation: breathe 10s ease-in-out infinite reverse;
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.7; }
+}
+
+/* Distillation particle effect */
+.particles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.particle {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: var(--amber-300);
+  border-radius: 50%;
+  opacity: 0;
+  animation: rise 6s ease-in infinite;
+}
+
+@keyframes rise {
+  0% { transform: translateY(0) scale(1); opacity: 0; }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.1; }
+  100% { transform: translateY(-100vh) scale(0.3); opacity: 0; }
+}
+
+.hero-content {
+  position: relative;
+  z-index: 2;
+  max-width: 800px;
+}
+
+.hero-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--amber-glow);
+  border: 1px solid var(--border-accent);
+  border-radius: 100px;
+  font-size: 0.8rem;
+  color: var(--amber-200);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 40px;
+  opacity: 0;
+  animation: fadeUp 0.8s ease forwards 0.2s;
+}
+
+.hero-label::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: var(--amber-400);
+  border-radius: 50%;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.hero h1 {
+  font-family: var(--serif-zh);
+  font-size: clamp(2.5rem, 5.5vw, 4.2rem);
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  opacity: 0;
+  animation: fadeUp 0.8s ease forwards 0.4s;
+}
+
+.hero h1 em {
+  font-style: normal;
+  background: linear-gradient(135deg, var(--amber-200), var(--amber-400));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-sub {
+  font-family: var(--serif-zh);
+  font-size: clamp(1.1rem, 2vw, 1.35rem);
+  color: var(--text-secondary);
+  line-height: 1.8;
+  margin-bottom: 48px;
+  max-width: 600px;
+  opacity: 0;
+  animation: fadeUp 0.8s ease forwards 0.6s;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.hero-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  opacity: 0;
+  animation: fadeUp 0.8s ease forwards 0.8s;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 36px;
+  background: linear-gradient(135deg, var(--amber-500), var(--amber-400));
+  color: var(--bg-deep);
+  font-weight: 700;
+  font-size: 0.95rem;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.2));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.btn-primary:hover::after { opacity: 1; }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(184, 115, 51, 0.3); }
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 24px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+.btn-ghost:hover { color: var(--amber-200); }
+
+/* ===== Divide Strip ===== */
+.divide-section {
+  padding: clamp(60px, 10vh, 120px) 0;
+  position: relative;
+}
+
+.divide-strip {
+  max-width: 600px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.divide-left, .divide-right {
+  width: 100%;
+  padding: clamp(32px, 4vw, 48px) clamp(28px, 4vw, 44px);
+}
+
+.divide-left {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px 12px 0 0;
+  text-align: center;
+  position: relative;
+}
+
+.divide-right {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-accent);
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.divide-right::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 0%, rgba(184, 115, 51, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.divide-logos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+  justify-content: center;
+}
+
+.divide-logos span {
+  padding: 4px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.divide-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.divide-left .divide-label {
+  color: var(--text-muted);
+}
+
+.divide-right .divide-label {
+  color: var(--amber-300);
+  position: relative;
+  z-index: 1;
+}
+
+.divide-headline {
+  font-family: var(--serif-zh);
+  font-weight: 600;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.divide-left .divide-headline {
+  font-size: clamp(1.2rem, 2.2vw, 1.5rem);
+  color: var(--text-muted);
+}
+
+.divide-left .divide-headline s {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.15);
+}
+
+.divide-right .divide-headline {
+  font-size: clamp(1.4rem, 2.8vw, 2rem);
+  color: var(--amber-100);
+  position: relative;
+  z-index: 1;
+}
+
+.divide-desc {
+  font-size: 0.9rem;
+  line-height: 1.8;
+}
+
+.divide-left .divide-desc {
+  color: var(--text-muted);
+}
+
+.divide-right .divide-desc {
+  color: var(--text-secondary);
+  position: relative;
+  z-index: 1;
+}
+
+.divide-right .divide-desc em {
+  font-style: normal;
+  color: var(--amber-200);
+}
+
+.divide-vs {
+  z-index: 10;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  font-family: var(--serif-en);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--amber-300);
+  letter-spacing: 0.05em;
+  margin: -22px auto;
+  position: relative;
+}
+
+/* ===== Section Headers ===== */
+.section-label {
+  font-family: var(--serif-en);
+  font-size: 0.8rem;
+  color: var(--amber-300);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-family: var(--serif-zh);
+  font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  font-weight: 700;
+  line-height: 1.35;
+  margin-bottom: 20px;
+}
+
+.section-desc {
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  max-width: 560px;
+  line-height: 1.8;
+}
+
+/* ===== Second Brain ===== */
+.brain-section {
+  position: relative;
+  overflow: hidden;
+}
+
+.brain-section::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 800px;
+  height: 800px;
+  background: radial-gradient(circle, rgba(184, 115, 51, 0.04) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.brain-header {
+  text-align: center;
+  margin-bottom: 64px;
+}
+
+.brain-header .section-desc {
+  margin: 0 auto;
+}
+
+.brain-concept {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: center;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.brain-text h3 {
+  font-family: var(--serif-zh);
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--amber-100);
+  margin-bottom: 16px;
+}
+
+.brain-text p {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 2;
+  margin-bottom: 16px;
+}
+
+.brain-text p em {
+  font-style: normal;
+  color: var(--amber-200);
+}
+
+.brain-visual {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+}
+
+.brain-diagram {
+  width: 100%;
+  max-width: 380px;
+}
+
+.brain-node {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  transition: all 0.4s ease;
+  position: relative;
+}
+
+.brain-node:hover {
+  border-color: var(--border-accent);
+  background: var(--bg-card);
+}
+
+.brain-node .node-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+.brain-node .node-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brain-node .node-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.brain-node .node-desc {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.brain-node.active {
+  border-color: var(--amber-400);
+  background: var(--amber-glow);
+  box-shadow: 0 0 24px rgba(184, 115, 51, 0.1);
+}
+
+.brain-node.active .node-desc {
+  color: var(--amber-100);
+}
+
+.brain-connector {
+  width: 2px;
+  height: 20px;
+  background: linear-gradient(180deg, var(--border-accent), transparent);
+  margin: 0 auto;
+  margin-bottom: 12px;
+}
+
+.brain-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 0;
+  margin-bottom: 12px;
+}
+
+.brain-arrow svg {
+  color: var(--amber-300);
+  opacity: 0.5;
+}
+
+/* ===== CODE Loop ===== */
+.code-section {
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.code-header {
+  text-align: center;
+  margin-bottom: 72px;
+}
+
+.code-header .section-desc {
+  margin: 0 auto;
+}
+
+.code-loop-visual {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.code-phases {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  margin-bottom: 48px;
+}
+
+.code-phase {
+  background: var(--bg-elevated);
+  padding: clamp(28px, 3vw, 40px);
+  text-align: center;
+  position: relative;
+  transition: all 0.4s ease;
+}
+
+.code-phase:hover {
+  background: var(--bg-card);
+}
+
+.code-phase::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -1px;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-left: 8px solid var(--amber-400);
+  opacity: 0.3;
+  z-index: 2;
+}
+
+.code-phase:last-child::after { display: none; }
+
+.code-phase.highlight {
+  background: var(--amber-glow);
+  border: 1px solid var(--border-accent);
+}
+
+.code-phase .phase-letter {
+  font-family: var(--serif-en);
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  line-height: 1;
+  margin-bottom: 8px;
+  transition: color 0.4s ease;
+}
+
+.code-phase.highlight .phase-letter {
+  color: var(--amber-300);
+}
+
+.code-phase .phase-name-en {
+  font-family: var(--serif-en);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.code-phase .phase-name-zh {
+  font-family: var(--serif-zh);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.code-phase.highlight .phase-name-zh {
+  color: var(--amber-100);
+}
+
+.code-phase .phase-desc {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.code-phase .phase-status {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+}
+
+.phase-status.done {
+  background: rgba(76, 175, 80, 0.15);
+  color: #81c784;
+  border: 1px solid rgba(76, 175, 80, 0.2);
+}
+
+.phase-status.current {
+  background: var(--amber-glow);
+  color: var(--amber-300);
+  border: 1px solid var(--border-accent);
+}
+
+.phase-status.planned {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+}
+
+.code-loop-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.code-loop-arrow .loop-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-accent), transparent);
+}
+
+.code-loop-arrow svg {
+  color: var(--amber-300);
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.code-insight {
+  text-align: center;
+  padding: 32px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.code-insight p {
+  font-family: var(--serif-zh);
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+.code-insight em {
+  font-style: normal;
+  color: var(--amber-200);
+}
+
+@media (max-width: 900px) {
+  .brain-concept { grid-template-columns: 1fr; gap: 40px; }
+  .code-phases { grid-template-columns: repeat(2, 1fr); }
+  .code-phase::after { display: none; }
+}
+
+@media (max-width: 600px) {
+  .code-phases { grid-template-columns: 1fr; }
+}
+
+/* ===== Pain Points ===== */
+.pain-section {
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pain-header {
+  text-align: center;
+  margin-bottom: 72px;
+}
+
+.pain-header .section-desc {
+  margin: 0 auto;
+}
+
+.pain-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+.pain-card {
+  background: var(--bg-elevated);
+  padding: clamp(32px, 4vw, 48px);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.4s ease;
+}
+
+.pain-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--amber-400), transparent);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.pain-card:hover::before { opacity: 1; }
+.pain-card:hover { background: var(--bg-card); }
+
+.pain-icon {
+  font-size: 2rem;
+  margin-bottom: 24px;
+  display: block;
+}
+
+.pain-card h3 {
+  font-family: var(--serif-zh);
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--amber-100);
+}
+
+.pain-card p {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+.pain-card .pain-quote {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--serif-zh);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+/* ===== How It Works / Distillation ===== */
+.distill-section .container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 80px;
+  align-items: center;
+}
+
+.distill-visual {
+  position: relative;
+  height: 500px;
+}
+
+.distill-flask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flask-container {
+  width: 280px;
+  height: 400px;
+  position: relative;
+}
+
+.flask-body {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 200px;
+  height: 260px;
+  border: 2px solid var(--border-accent);
+  border-radius: 0 0 100px 100px;
+  overflow: hidden;
+}
+
+.flask-neck {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 120px;
+  border-left: 2px solid var(--border-accent);
+  border-right: 2px solid var(--border-accent);
+  border-top: 2px solid var(--border-accent);
+  border-radius: 4px 4px 0 0;
+}
+
+.flask-liquid {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 60%;
+  background: linear-gradient(180deg,
+    rgba(212, 165, 116, 0.1) 0%,
+    rgba(184, 115, 51, 0.25) 50%,
+    rgba(212, 165, 116, 0.4) 100%
+  );
+  animation: liquidBreathe 4s ease-in-out infinite;
+}
+
+@keyframes liquidBreathe {
+  0%, 100% { height: 58%; }
+  50% { height: 62%; }
+}
+
+.flask-bubble {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: rgba(212, 165, 116, 0.4);
+  border-radius: 50%;
+  animation: bubble 3s ease-in infinite;
+}
+
+@keyframes bubble {
+  0% { transform: translateY(0) scale(1); opacity: 0.6; }
+  100% { transform: translateY(-200px) scale(0.2); opacity: 0; }
+}
+
+/* Input fragments floating around the flask */
+.fragment {
+  position: absolute;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-12px); }
+}
+
+.fragment:nth-child(1) { top: 10%; left: 0; animation-delay: 0s; }
+.fragment:nth-child(2) { top: 30%; right: 0; animation-delay: 1.5s; }
+.fragment:nth-child(3) { top: 55%; left: -10%; animation-delay: 3s; }
+.fragment:nth-child(4) { bottom: 15%; right: -5%; animation-delay: 4.5s; }
+
+/* Output crystal */
+.crystal {
+  position: absolute;
+  bottom: 10%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 20px;
+  background: linear-gradient(135deg, var(--amber-glow), var(--amber-glow-strong));
+  border: 1px solid var(--amber-400);
+  border-radius: 8px;
+  font-family: var(--serif-zh);
+  font-size: 0.8rem;
+  color: var(--amber-200);
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 0 40px rgba(184, 115, 51, 0.15);
+}
+
+.distill-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+
+.step {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.step-number {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  font-family: var(--serif-en);
+  font-size: 0.9rem;
+  color: var(--amber-300);
+}
+
+.step-content h3 {
+  font-family: var(--serif-zh);
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--amber-100);
+}
+
+.step-content p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+/* ===== Features ===== */
+.features-section {
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.features-header {
+  margin-bottom: 72px;
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+}
+
+.feature-card {
+  background: var(--bg-elevated);
+  padding: clamp(36px, 4vw, 56px);
+  position: relative;
+  transition: all 0.4s ease;
+}
+
+.feature-card:hover { background: var(--bg-card); }
+
+.feature-tag {
+  display: inline-block;
+  padding: 4px 12px;
+  background: var(--amber-glow);
+  border-radius: 4px;
+  font-size: 0.7rem;
+  color: var(--amber-300);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 20px;
+}
+
+.feature-card h3 {
+  font-family: var(--serif-zh);
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.feature-card p {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.8;
+  margin-bottom: 24px;
+}
+
+/* Chat mockup inside feature card */
+.chat-mock {
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 20px;
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+
+.chat-msg {
+  padding: 10px 14px;
+  border-radius: 12px;
+  margin-bottom: 8px;
+  max-width: 85%;
+}
+
+.chat-msg.user {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  margin-left: auto;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-msg.ai {
+  background: var(--amber-glow);
+  border: 1px solid var(--border-accent);
+  color: var(--amber-100);
+  border-bottom-left-radius: 4px;
+}
+
+.chat-msg .sender {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  letter-spacing: 0.05em;
+}
+
+/* Note mockup */
+.note-mock {
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 20px;
+  font-size: 0.8rem;
+}
+
+.note-mock .note-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.note-mock .note-icon {
+  width: 20px;
+  height: 20px;
+  background: var(--amber-glow);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+}
+
+.note-mock .note-title {
+  font-family: var(--serif-zh);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.note-mock .note-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.note-mock .note-body {
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+.note-mock .note-body .tag {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--amber-glow);
+  border-radius: 4px;
+  font-size: 0.7rem;
+  color: var(--amber-300);
+  margin: 0 2px;
+}
+
+.note-mock .note-body .link {
+  color: var(--amber-300);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ===== Comparison ===== */
+.compare-section .container {
+  max-width: 960px;
+}
+
+.compare-header {
+  text-align: center;
+  margin-bottom: 64px;
+}
+
+.compare-header .section-desc {
+  margin: 0 auto;
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.compare-table th,
+.compare-table td {
+  padding: 20px 24px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.compare-table thead th {
+  font-family: var(--serif-zh);
+  font-weight: 600;
+  font-size: 1rem;
+  padding-bottom: 24px;
+  border-bottom: 2px solid var(--border-accent);
+}
+
+.compare-table thead th:first-child {
+  color: var(--text-muted);
+}
+
+.compare-table thead th:nth-child(2) {
+  color: var(--text-secondary);
+}
+
+.compare-table thead th:last-child {
+  color: var(--amber-200);
+}
+
+.compare-table tbody td:first-child {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.compare-table tbody td:nth-child(2) {
+  color: var(--text-muted);
+}
+
+.compare-table tbody td:last-child {
+  color: var(--amber-100);
+  position: relative;
+}
+
+.compare-table tbody tr {
+  transition: background 0.3s ease;
+}
+
+.compare-table tbody tr:hover {
+  background: var(--amber-glow);
+}
+
+.compare-highlight {
+  position: relative;
+}
+
+.compare-highlight::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -24px;
+  width: 3px;
+  background: var(--amber-400);
+  border-radius: 2px;
+}
+
+/* ===== Roadmap ===== */
+.roadmap-section .container {
+  max-width: 900px;
+}
+
+.roadmap-header {
+  text-align: center;
+  margin-bottom: 56px;
+}
+
+.roadmap-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+}
+
+.roadmap-col {
+  background: var(--bg-elevated);
+  padding: clamp(32px, 4vw, 48px);
+  transition: background 0.4s ease;
+}
+
+.roadmap-col:hover {
+  background: var(--bg-card);
+}
+
+.roadmap-col h3 {
+  font-family: var(--serif-zh);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--amber-100);
+  margin-bottom: 20px;
+}
+
+.roadmap-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.roadmap-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.roadmap-list .dot {
+  width: 6px;
+  height: 6px;
+  background: var(--amber-400);
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 7px;
+}
+
+.roadmap-list .dot.current {
+  box-shadow: 0 0 8px rgba(184, 115, 51, 0.5);
+}
+
+.roadmap-list .dot.future {
+  background: var(--text-muted);
+}
+
+.roadmap-list em {
+  font-style: normal;
+  color: var(--amber-200);
+}
+
+.roadmap-list .tag-sm {
+  display: inline-block;
+  padding: 1px 7px;
+  background: rgba(76, 175, 80, 0.12);
+  color: #81c784;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.roadmap-list .tag-sm.next {
+  background: var(--amber-glow);
+  color: var(--amber-300);
+}
+
+@media (max-width: 700px) {
+  .roadmap-columns { grid-template-columns: 1fr; }
+}
+
+/* ===== Founder Story ===== */
+.story-section {
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.story-section .container {
+  max-width: 760px;
+}
+
+.story-quote {
+  font-family: var(--serif-zh);
+  font-size: clamp(1.3rem, 2.5vw, 1.75rem);
+  line-height: 1.8;
+  color: var(--text-primary);
+  position: relative;
+  padding-left: 32px;
+  margin-bottom: 48px;
+}
+
+.story-quote::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: linear-gradient(180deg, var(--amber-400), transparent);
+  border-radius: 2px;
+}
+
+.story-body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.story-body p {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  line-height: 2;
+}
+
+.story-body p em {
+  font-style: normal;
+  color: var(--amber-200);
+}
+
+.story-signature {
+  margin-top: 40px;
+  padding-top: 32px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.story-avatar {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, var(--amber-glow), var(--amber-glow-strong));
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--serif-en);
+  font-size: 1.1rem;
+  color: var(--amber-300);
+}
+
+.story-sig-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.story-sig-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.story-sig-role {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* ===== CTA ===== */
+.cta-section {
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.cta-section::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(184, 115, 51, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.cta-section .section-title {
+  margin-bottom: 16px;
+}
+
+.cta-section .section-desc {
+  margin: 0 auto 48px;
+  text-align: center;
+}
+
+.cta-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  align-items: center;
+}
+
+.cta-note {
+  margin-top: 24px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* ===== Footer ===== */
+footer {
+  padding: 48px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+footer .container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.footer-logo {
+  font-family: var(--serif-en);
+  font-size: 1.1rem;
+  color: var(--text-muted);
+}
+
+.footer-links {
+  display: flex;
+  gap: 24px;
+  list-style: none;
+}
+
+.footer-links a {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+  transition: color 0.3s ease;
+}
+
+.footer-links a:hover { color: var(--amber-200); }
+
+/* ===== Scroll Animations ===== */
+.reveal {
+  opacity: 0;
+  transform: translateY(32px);
+  transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-delay-1 { transition-delay: 0.1s; }
+.reveal-delay-2 { transition-delay: 0.2s; }
+.reveal-delay-3 { transition-delay: 0.3s; }
+.reveal-delay-4 { transition-delay: 0.4s; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  .pain-grid { grid-template-columns: 1fr; }
+  .features-grid { grid-template-columns: 1fr; }
+  .distill-section .container {
+    grid-template-columns: 1fr;
+    gap: 48px;
+  }
+  .distill-visual { height: 360px; }
+  .compare-table { font-size: 0.8rem; }
+  .compare-table th,
+  .compare-table td { padding: 14px 12px; }
+  footer .container { flex-direction: column; gap: 16px; }
+}
+
+@media (max-width: 600px) {
+  .hero-actions { flex-direction: column; align-items: flex-start; }
+  .cta-actions { flex-direction: column; }
+  .flask-container { transform: scale(0.8); }
+}
+</style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<nav>
+  <div class="container">
+    <a href="#" class="nav-logo">Crucible</a>
+    <a href="#cta" class="nav-cta-top">开始使用</a>
+  </div>
+</nav>
+
+<!-- Side Navigation -->
+<div class="side-nav" id="sideNav">
+  <a href="#second-brain" data-section="second-brain">第二大脑</a>
+  <a href="#pain" data-section="pain">痛点</a>
+  <a href="#code-loop" data-section="code-loop">知识闭环</a>
+  <a href="#features" data-section="features">功能</a>
+  <a href="#roadmap" data-section="roadmap">蓝图</a>
+  <a href="#story" data-section="story">故事</a>
+</div>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-bg">
+    <div class="particles" id="particles"></div>
+  </div>
+  <div class="container">
+    <div class="hero-content">
+      <div class="hero-label">AI Knowledge Distillation</div>
+      <h1>不只帮你记住，<br>更帮你<em>想清楚</em>。</h1>
+      <p class="hero-sub">
+        收藏了太多，问过 AI 太多次，知识依然是零。<br>
+        Crucible 通过追问和补充，把模糊感受蒸馏为清晰认知。
+      </p>
+      <div class="hero-actions">
+        <a href="#cta" class="btn-primary">
+          开始蒸馏你的想法
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a href="#distill" class="btn-ghost">
+          了解蒸馏过程
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2v10M4 9l3 3 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Divide: Others vs Crucible -->
+<section class="divide-section">
+  <div class="divide-strip">
+    <div class="divide-left reveal">
+      <div class="divide-label">Every other tool</div>
+      <div class="divide-logos">
+        <span>Notion AI</span>
+        <span>Readwise</span>
+        <span>flomo</span>
+        <span>Mem</span>
+        <span>Obsidian</span>
+        <span>Tana</span>
+      </div>
+      <div class="divide-headline"><s>帮你存进去，帮你找得到。</s></div>
+      <div class="divide-desc">存完了呢？没有然后了。</div>
+    </div>
+    <div class="divide-vs">vs</div>
+    <div class="divide-right reveal">
+      <div class="divide-label">Crucible</div>
+      <div class="divide-headline">帮你想清楚。</div>
+      <div class="divide-desc">不只帮你存——<em>追问你、补充你</em>，把「觉得有意思」变成「我知道怎么用」。</div>
+    </div>
+  </div>
+</section>
+
+<!-- Second Brain -->
+<section class="brain-section" id="second-brain">
+  <div class="container">
+    <div class="brain-header reveal">
+      <div class="section-label">Second Brain</div>
+      <h2 class="section-title">你需要的不是笔记工具，<br>是一个第二大脑</h2>
+      <p class="section-desc">大脑擅长产生想法，不擅长存储。第二大脑不只存，还帮你加工。</p>
+    </div>
+    <div class="brain-concept">
+      <div class="brain-text reveal">
+        <h3>不是硬盘，是思考的延伸</h3>
+        <p>
+          市面上的「第二大脑」本质是<em>外置硬盘</em>——帮你存、帮你找。真正的大脑还会<em>加工、连接、补充、挑战</em>。
+        </p>
+        <p>
+          Crucible 帮你想清楚「这对你意味着什么」——追问盲区、补充背景、连接碎片，自动织成生长的知识网络。
+        </p>
+      </div>
+      <div class="brain-visual reveal">
+        <div class="brain-diagram">
+          <div class="brain-node">
+            <span class="node-icon">🧠</span>
+            <div class="node-text">
+              <span class="node-label">你的大脑</span>
+              <span class="node-desc">产生想法，但留不住</span>
+            </div>
+          </div>
+          <div class="brain-arrow">
+            <svg width="16" height="24" viewBox="0 0 16 24" fill="none"><path d="M8 0v20M3 16l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="brain-node">
+            <span class="node-icon">📥</span>
+            <div class="node-text">
+              <span class="node-label">普通工具</span>
+              <span class="node-desc">存进去，找得到——然后呢？</span>
+            </div>
+          </div>
+          <div class="brain-arrow">
+            <svg width="16" height="24" viewBox="0 0 16 24" fill="none"><path d="M8 0v20M3 16l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="brain-node active">
+            <span class="node-icon">🔥</span>
+            <div class="node-text">
+              <span class="node-label">Crucible · 第二大脑</span>
+              <span class="node-desc">对话 → 蒸馏 → 关联 → 生长</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pain Points -->
+<section class="pain-section" id="pain">
+  <div class="container">
+    <div class="pain-header reveal">
+      <div class="section-label">The Problem</div>
+      <h2 class="section-title">存了等于没存</h2>
+    </div>
+    <div class="pain-grid">
+      <div class="pain-card reveal reveal-delay-1">
+        <span class="pain-icon">📦</span>
+        <h3>收藏焦虑</h3>
+        <p>收藏夹 2000 条，再也不会打开。每次收藏的那一刻，其实就是告别。</p>
+      </div>
+      <div class="pain-card reveal reveal-delay-2">
+        <span class="pain-icon">💨</span>
+        <h3>理解蒸发</h3>
+        <p>截图发给 AI，得到解释，关掉对话。三天后跟没看过一样。</p>
+      </div>
+      <div class="pain-card reveal reveal-delay-3">
+        <span class="pain-icon">🔒</span>
+        <h3>完美主义锁死</h3>
+        <p>「没想完整就不写。」结果就是——永远不写。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CODE Knowledge Loop -->
+<section class="code-section" id="code-loop">
+  <div class="container">
+    <div class="code-header reveal">
+      <div class="section-label">Knowledge Loop</div>
+      <h2 class="section-title">知识闭环：从碎片到输出</h2>
+      <p class="section-desc">四个阶段自动运转，你只感知到在和 AI 对话。</p>
+    </div>
+    <div class="code-loop-visual">
+      <div class="code-phases reveal">
+        <!-- Capture -->
+        <div class="code-phase">
+          <div class="phase-letter">C</div>
+          <div class="phase-name-en">Capture</div>
+          <div class="phase-name-zh">捕获</div>
+          <div class="phase-desc">一句话、一条链接、一张截图——任何碎片丢进飞书，Crucible 先接住。</div>
+          <span class="phase-status done">V1 已完成</span>
+        </div>
+        <!-- Organize -->
+        <div class="code-phase">
+          <div class="phase-letter">O</div>
+          <div class="phase-name-en">Organize</div>
+          <div class="phase-name-zh">整理</div>
+          <div class="phase-desc">自动生成原子笔记 + 标签 + 双链，写入 Obsidian。你不需要动手整理。</div>
+          <span class="phase-status done">V2 已完成</span>
+        </div>
+        <!-- Distill -->
+        <div class="code-phase highlight">
+          <div class="phase-letter">D</div>
+          <div class="phase-name-en">Distill</div>
+          <div class="phase-name-zh">蒸馏</div>
+          <div class="phase-desc">诊断成熟度、连接碎片、锻造深度——这是核心差异。</div>
+          <span class="phase-status done">V3 已完成</span>
+        </div>
+        <!-- Express -->
+        <div class="code-phase">
+          <div class="phase-letter">E</div>
+          <div class="phase-name-en">Express</div>
+          <div class="phase-name-zh">输出</div>
+          <div class="phase-desc">知识成熟时主动触发输出，草稿自动归档反哺知识库。</div>
+          <span class="phase-status done">V4 已完成</span>
+        </div>
+      </div>
+      <!-- Loop Arrow -->
+      <div class="code-loop-arrow reveal">
+        <div class="loop-line"></div>
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M17 10a7 7 0 11-2.05-4.95" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M17 3v4h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>输出反哺输入——知识永远在生长</span>
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 10a7 7 0 012.05-4.95" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 3v4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div class="loop-line"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="features-section" id="features">
+  <div class="container">
+    <div class="features-header reveal">
+      <div class="section-label">Your Journey</div>
+      <h2 class="section-title">一个想法的完整旅程</h2>
+    </div>
+    <div class="features-grid">
+      <!-- Step 1: Input a fragment -->
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-tag">Step 1 · 丢进来</div>
+        <h3>随手一条，Crucible 接住</h3>
+        <p>一句话、一条链接、一张截图。不用想完整，丢进来就行。</p>
+        <div class="chat-mock">
+          <div class="chat-msg user">
+            <div class="sender">你</div>
+            今天看到个概念觉得挺有意思的
+          </div>
+          <div class="chat-msg ai">
+            <div class="sender">Crucible</div>
+            收到。「有意思」——具体是哪一点？是你没见过，还是觉得能用在自己身上？
+          </div>
+        </div>
+      </div>
+      <!-- Step 2: Socratic deepening -->
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-tag">Step 2 · 越聊越深</div>
+        <h3>几轮对话，模糊变清晰</h3>
+        <p>追问你没想到的角度，补充你缺少的背景。帮你从「觉得不错」走到「我知道怎么用」。</p>
+        <div class="chat-mock">
+          <div class="chat-msg user">
+            <div class="sender">你</div>
+            好像是觉得能用在自己身上，但不太确定怎么用
+          </div>
+          <div class="chat-msg ai">
+            <div class="sender">Crucible</div>
+            这个概念常见的应用场景有三种：团队复盘、个人决策记录、竞品分析框架。你平时哪种场景最多？
+          </div>
+          <div class="chat-msg user">
+            <div class="sender">你</div>
+            竞品分析！每次都是看完就忘
+          </div>
+          <div class="chat-msg ai">
+            <div class="sender">Crucible</div>
+            好，这个洞察已沉淀为笔记，标记为🌱种子。下次再聊到相关话题，我会帮你串起来。
+          </div>
+        </div>
+      </div>
+      <!-- Step 3: Grow and challenge -->
+      <div class="feature-card reveal reveal-delay-3">
+        <div class="feature-tag">Step 3 · 想法长大</div>
+        <h3>跨时间追踪，认知不断锻造</h3>
+        <p>同一主题聊多次，想法从种子🌱长到成熟🌳。成熟前，还会被挑战。</p>
+        <div class="note-mock" style="padding: 24px 20px;">
+          <div style="display: flex; flex-direction: column; gap: 14px; font-size: 0.8rem;">
+            <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border-subtle);">
+              <span style="font-size: 1.1rem;">🌱</span>
+              <div>
+                <div style="color: var(--text-secondary);">AI 会替代 PM 吗</div>
+                <div style="font-size: 0.7rem; color: var(--text-muted);">聊过 1 次 · 没有场景验证</div>
+              </div>
+              <span class="tag" style="margin-left: auto;">种子</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border-subtle);">
+              <span style="font-size: 1.1rem;">🌿</span>
+              <div>
+                <div style="color: var(--text-secondary);">知识管理的核心是检索不是存储</div>
+                <div style="font-size: 0.7rem; color: var(--text-muted);">聊过 3 次 · 被挑战过 1 次</div>
+              </div>
+              <span class="tag" style="margin-left: auto;">生长</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--amber-glow); border-radius: 8px; border: 1px solid var(--border-accent);">
+              <span style="font-size: 1.1rem;">🌳</span>
+              <div>
+                <div style="color: var(--amber-100);">好产品应该把复杂性留给自己</div>
+                <div style="font-size: 0.7rem; color: var(--amber-200);">聊过 5 次 · 3 个场景 · 挑战验证通过</div>
+              </div>
+              <span class="tag" style="margin-left: auto; background: rgba(76,175,80,0.15); color: #81c784;">成熟</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Step 4: Output -->
+      <div class="feature-card reveal reveal-delay-4">
+        <div class="feature-tag">Step 4 · 开花结果</div>
+        <h3>想法熟了，该写出来了</h3>
+        <p>不用纠结「什么时候该动笔」，认知成熟了它会告诉你。</p>
+        <div class="chat-mock">
+          <div class="chat-msg ai">
+            <div class="sender">Crucible · 成熟触发</div>
+            你关于「产品复杂性管理」已经聊过 5 次，跨 3 个场景，经过挑战验证。这个认知成熟了——要不要输出一篇小红书？
+          </div>
+          <div class="chat-msg user">
+            <div class="sender">你</div>
+            好，帮我生成草稿
+          </div>
+          <div class="chat-msg ai">
+            <div class="sender">Crucible</div>
+            草稿已生成。已归档到知识库，下次可以继续迭代。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Roadmap -->
+<section class="roadmap-section" id="roadmap">
+  <div class="container">
+    <div class="roadmap-header reveal">
+      <div class="section-label">What's Next</div>
+      <h2 class="section-title">不只是飞书 Bot</h2>
+    </div>
+    <div class="roadmap-columns">
+      <div class="roadmap-col reveal">
+        <h3>更多入口</h3>
+        <ul class="roadmap-list">
+          <li><span class="dot current"></span>飞书 Bot <span class="tag-sm">当前</span></li>
+          <li><span class="dot"></span>网页版 <span class="tag-sm next">下一步</span></li>
+          <li><span class="dot future"></span>浏览器插件 — 一键发送当前页面</li>
+          <li><span class="dot future"></span>iOS Share Sheet — 从任意 App 分享</li>
+          <li><span class="dot future"></span>App（PWA）— 网页套壳，移动端原生体验</li>
+        </ul>
+      </div>
+      <div class="roadmap-col reveal">
+        <h3>产品形态演进</h3>
+        <ul class="roadmap-list">
+          <li><span class="dot current"></span><em>个人版</em> — 一个人的第二大脑 <span class="tag-sm">当前</span></li>
+          <li><span class="dot"></span><em>独立产品</em> — 脱离平台依赖，内置 NanoBot 引擎</li>
+          <li><span class="dot future"></span><em>团队版</em> — 会后复盘、调研沉淀、团队知识图谱</li>
+          <li><span class="dot future"></span><em>企业版</em> — 权限隔离 + 能力盲区分析</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Founder Story -->
+<section class="story-section" id="story">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">Origin Story</div>
+      <h2 class="section-title" style="margin-bottom: 48px;">我做这个产品，<br>因为我就是第一个用户</h2>
+    </div>
+    <div class="story-quote reveal">
+      收藏夹 2000 条，AI 聊天记录无数。<br>我的知识依然是零。
+    </div>
+    <div class="story-body">
+      <p class="reveal">
+        我是产品经理，每天刷 Twitter、公众号，看到好文章就收藏，有想法就截图发给 AI。试过 Notion、flomo、Readwise——都帮我「存进去」了，但存进去之后什么都没发生。问题不是记不住，是<em>从来没真正想清楚过</em>。
+      </p>
+      <p class="reveal">
+        真正的断点不在工具，在我自己。完美主义让我「没想完整就不写」，结果永远不写。我需要的不是更好的笔记工具，是<em>一个逼我想清楚的对话伙伴</em>。
+      </p>
+      <p class="reveal">
+        所以我做了 Crucible。它不说「已收藏」，它问你<em>「这对你意味着什么？」</em>——几轮对话后，模糊感受变成清晰认知，自动沉淀进知识库。
+      </p>
+    </div>
+    <div class="story-signature reveal">
+      <div class="story-avatar">T</div>
+      <div class="story-sig-text">
+        <div class="story-sig-name">Tracy</div>
+        <div class="story-sig-role">Crucible 创始人 · 产品经理 · 第一个用户</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section" id="cta">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">Get Started</div>
+      <h2 class="section-title">你的想法值得被认真对待</h2>
+      <p class="section-desc">停止收藏，开始蒸馏。</p>
+    </div>
+    <div class="cta-actions reveal">
+      <a href="#" class="btn-primary">
+        开始使用 Crucible
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a href="#" class="btn-ghost">查看开发文档</a>
+    </div>
+    <p class="cta-note reveal">个人项目 · 开源 · 基于 Obsidian 本地存储</p>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <div class="footer-logo">Crucible &copy; 2026</div>
+    <ul class="footer-links">
+      <li><a href="#">GitHub</a></li>
+      <li><a href="#">设计文档</a></li>
+      <li><a href="#">联系 Tracy</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script>
+// Scroll reveal
+const reveals = document.querySelectorAll('.reveal');
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
+
+reveals.forEach(el => observer.observe(el));
+
+// Generate particles
+const particlesEl = document.getElementById('particles');
+for (let i = 0; i < 20; i++) {
+  const p = document.createElement('div');
+  p.className = 'particle';
+  p.style.left = Math.random() * 100 + '%';
+  p.style.top = 60 + Math.random() * 40 + '%';
+  p.style.animationDelay = Math.random() * 6 + 's';
+  p.style.animationDuration = 4 + Math.random() * 4 + 's';
+  p.style.width = p.style.height = 1 + Math.random() * 2 + 'px';
+  particlesEl.appendChild(p);
+}
+
+// Nav scroll effect
+const sideNav = document.getElementById('sideNav');
+const sideLinks = sideNav.querySelectorAll('a[data-section]');
+const sections = Array.from(sideLinks).map(a => ({
+  el: document.getElementById(a.dataset.section),
+  link: a
+}));
+
+window.addEventListener('scroll', () => {
+  const nav = document.querySelector('nav');
+  const scrollY = window.scrollY;
+
+  // Compact top bar on scroll
+  nav.style.padding = scrollY > 100 ? '10px 0' : '16px 0';
+
+  // Show/hide side nav (after hero)
+  sideNav.classList.toggle('visible', scrollY > window.innerHeight * 0.5);
+
+  // Active section tracking
+  let current = null;
+  for (const s of sections) {
+    if (s.el && s.el.getBoundingClientRect().top <= window.innerHeight * 0.4) {
+      current = s;
+    }
+  }
+  sideLinks.forEach(l => l.classList.remove('active'));
+  if (current) current.link.classList.add('active');
+});
+
+// Smooth anchor scroll
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const target = document.querySelector(a.getAttribute('href'));
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+</script>
+
+</body>
+</html>
