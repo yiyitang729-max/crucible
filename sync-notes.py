@@ -340,6 +340,17 @@ def init_db():
             note_id     TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tag_maturity (
+            tag             TEXT PRIMARY KEY,
+            maturity        TEXT DEFAULT 'seed',
+            conversation_count  INTEGER DEFAULT 0,
+            application_count   INTEGER DEFAULT 0,
+            linked_note_count   INTEGER DEFAULT 0,
+            score           REAL DEFAULT 0.0,
+            updated_at      DATETIME
+        )
+    """)
     conn.commit()
     return conn
 
@@ -463,6 +474,28 @@ def upload_file_to_server(local_content, remote_path):
         return False
     finally:
         os.unlink(tmp_path)
+
+
+def compute_maturity_level(conv_count, app_count, linked_count):
+    """
+    计算知识成熟度。
+    基于用户行为数据：对话次数、应用场景数、关联笔记数。
+    返回 {"maturity": "seed|growing|mature", "score": 0.0-1.0}
+    """
+    conv_score = min(conv_count / 5, 1.0)
+    app_score = min(app_count / 3, 1.0)
+    link_score = min(linked_count / 3, 1.0)
+
+    score = conv_score * 0.4 + app_score * 0.35 + link_score * 0.25
+
+    if conv_count >= 4 and app_count >= 2 and linked_count >= 2:
+        maturity = "mature"
+    elif conv_count >= 2 or app_count >= 1:
+        maturity = "growing"
+    else:
+        maturity = "seed"
+
+    return {"maturity": maturity, "score": round(score, 2)}
 
 
 def build_digest_report(conn):
