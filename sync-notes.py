@@ -498,6 +498,71 @@ def compute_maturity_level(conv_count, app_count, linked_count):
     return {"maturity": maturity, "score": round(score, 2)}
 
 
+def update_tag_maturity(conn):
+    """从 DB 数据计算每个标签的知识成熟度，写入 tag_maturity 表。"""
+    rows = conn.execute("""
+        SELECT
+            nt.tag,
+            COUNT(DISTINCT nt.note_id) as conv_count,
+            COALESCE(SUM(CASE WHEN cm.has_application = 1 THEN 1 ELSE 0 END), 0) as app_count,
+            COALESCE(SUM(CASE WHEN nm.linked_count > 0 THEN 1 ELSE 0 END), 0) as linked_count
+        FROM note_tags nt
+        LEFT JOIN note_metrics nm ON nt.note_id = nm.note_id
+        LEFT JOIN conversation_metrics cm ON nt.note_id = cm.note_id
+        GROUP BY nt.tag
+    """).fetchall()
+
+    now = datetime.now().isoformat()
+    for tag, conv_count, app_count, linked_count in rows:
+        result = compute_maturity_level(conv_count, app_count, linked_count)
+        conn.execute("""
+            INSERT INTO tag_maturity (tag, maturity, conversation_count, application_count, linked_note_count, score, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tag) DO UPDATE SET
+                maturity = excluded.maturity,
+                conversation_count = excluded.conversation_count,
+                application_count = excluded.application_count,
+                linked_note_count = excluded.linked_note_count,
+                score = excluded.score,
+                updated_at = excluded.updated_at
+        """, (tag, result["maturity"], conv_count, app_count, linked_count, result["score"], now))
+
+    conn.commit()
+    logger.info(f"更新 {len(rows)} 个标签的知识成熟度")
+
+
+def build_maturity_report(conn):
+    """从 tag_maturity 表生成成熟度报告。"""
+    rows = conn.execute("""
+        SELECT tag, maturity, conversation_count, application_count, linked_note_count, score
+        FROM tag_maturity
+        ORDER BY score DESC
+    """).fetchall()
+
+    if not rows:
+        return None
+
+    distribution = {"seed": 0, "growing": 0, "mature": 0}
+    tags = []
+    for tag, maturity, conv_count, app_count, linked_count, score in rows:
+        distribution[maturity] = distribution.get(maturity, 0) + 1
+        tags.append({
+            "tag": tag,
+            "maturity": maturity,
+            "conversation_count": conv_count,
+            "application_count": app_count,
+            "linked_note_count": linked_count,
+            "score": score,
+        })
+
+    return {
+        "updated_at": datetime.now().isoformat(),
+        "total_tags": len(rows),
+        "distribution": distribution,
+        "tags": tags,
+    }
+
+
 def build_digest_report(conn):
     """分析待消化收藏，按标签聚类，生成推荐报告。"""
     rows = conn.execute("""

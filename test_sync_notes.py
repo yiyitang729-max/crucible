@@ -592,6 +592,77 @@ class TestTagMaturity(unittest.TestCase):
         result = sn.compute_maturity_level(conv_count=5, app_count=2, linked_count=0)
         self.assertNotEqual(result["maturity"], "mature")
 
+    def test_update_tag_maturity_from_db(self):
+        """从 DB 数据计算每个标签的成熟度"""
+        for i in range(3):
+            note_id = f"note_{i}"
+            self.conn.execute(
+                "INSERT INTO note_metrics (note_id, created_at, linked_count) VALUES (?, ?, ?)",
+                (note_id, "2026-04-01", 1 if i < 2 else 0)
+            )
+            self.conn.execute(
+                "INSERT INTO note_tags (note_id, tag, tag_type) VALUES (?, ?, 'topic')",
+                (note_id, "远程办公")
+            )
+            self.conn.execute(
+                "INSERT INTO conversation_metrics (id, created_at, input_type, turns, completed, has_application, user_msg_chars, note_id) VALUES (?, ?, 'thought', 3, 1, ?, 100, ?)",
+                (f"conv_{i}", "2026-04-01", 1 if i < 2 else 0, note_id)
+            )
+        self.conn.commit()
+
+        sn.update_tag_maturity(self.conn)
+
+        row = self.conn.execute(
+            "SELECT maturity, conversation_count, application_count FROM tag_maturity WHERE tag = ?",
+            ("远程办公",)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "growing")
+        self.assertEqual(row[1], 3)
+        self.assertEqual(row[2], 2)
+
+    def test_update_tag_maturity_seed(self):
+        """只有 1 条笔记的标签 → seed"""
+        self.conn.execute("INSERT INTO note_metrics (note_id, created_at) VALUES ('n1', '2026-04-01')")
+        self.conn.execute("INSERT INTO note_tags (note_id, tag, tag_type) VALUES ('n1', '新话题', 'topic')")
+        self.conn.execute(
+            "INSERT INTO conversation_metrics (id, created_at, input_type, turns, completed, has_application, user_msg_chars, note_id) VALUES ('c1', '2026-04-01', 'thought', 2, 1, 0, 50, 'n1')"
+        )
+        self.conn.commit()
+
+        sn.update_tag_maturity(self.conn)
+
+        row = self.conn.execute("SELECT maturity FROM tag_maturity WHERE tag = ?", ("新话题",)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "seed")
+
+    def test_build_maturity_report(self):
+        """生成成熟度报告 JSON"""
+        now = "2026-04-11T12:00:00"
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, conversation_count, application_count, linked_note_count, score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("远程办公", "growing", 3, 2, 1, 0.52, now)
+        )
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, conversation_count, application_count, linked_note_count, score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("AI产品", "seed", 1, 0, 0, 0.08, now)
+        )
+        self.conn.commit()
+
+        report = sn.build_maturity_report(self.conn)
+        self.assertIsNotNone(report)
+        self.assertEqual(report["total_tags"], 2)
+        self.assertEqual(report["distribution"]["seed"], 1)
+        self.assertEqual(report["distribution"]["growing"], 1)
+        self.assertEqual(report["distribution"]["mature"], 0)
+        self.assertEqual(len(report["tags"]), 2)
+        self.assertEqual(report["tags"][0]["tag"], "远程办公")  # 按 score 降序
+
+    def test_build_maturity_report_empty(self):
+        """没有标签时返回 None"""
+        report = sn.build_maturity_report(self.conn)
+        self.assertIsNone(report)
+
 
 if __name__ == "__main__":
     unittest.main()
