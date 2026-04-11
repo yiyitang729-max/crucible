@@ -8,6 +8,7 @@ Crucible sync-notes.py 测试
 
 import importlib.util
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -429,6 +430,65 @@ class TestDatabaseIntegration(unittest.TestCase):
 
         report = sn.build_digest_report(self.conn)
         self.assertEqual(report["pending_count"], 1)
+
+
+class TestBookmarkUrlExtraction(unittest.TestCase):
+    """测试收藏消息中的 URL 和摘要提取——对应 Plan 8 链接内容抓取"""
+
+    def test_bookmark_with_url_and_summary(self):
+        """正常 bookmark：Bot 抓到内容后回复摘要"""
+        bot_text = "收到，已加入待消化。这篇讲的是如何用 AI 做知识管理"
+        summary_match = re.search(r"已加入待消化[。.]\s*(.+?)$", bot_text)
+        self.assertIsNotNone(summary_match)
+        self.assertIn("知识管理", summary_match.group(1))
+
+    def test_bookmark_fallback_unreachable_url(self):
+        """fallback：链接打不开时仍应识别为 bookmark"""
+        bot_text = "收到，已加入待消化。链接我暂时打不开，下次消化时你可以补充一下内容。"
+        self.assertIn("已加入待消化", bot_text)
+        summary_match = re.search(r"已加入待消化[。.]\s*(.+?)$", bot_text)
+        self.assertIsNotNone(summary_match)
+
+    def test_url_extraction_from_user_msg(self):
+        """从用户消息中提取 URL"""
+        user_text = "https://mp.weixin.qq.com/s/abc123 这篇不错"
+        url_match = re.search(r"https?://\S+", user_text)
+        self.assertIsNotNone(url_match)
+        self.assertTrue(url_match.group(0).startswith("https://mp.weixin.qq.com"))
+
+    def test_url_extraction_bare_url(self):
+        """纯链接（无附加文字）"""
+        user_text = "https://example.com/article/123"
+        url_match = re.search(r"https?://\S+", user_text)
+        self.assertIsNotNone(url_match)
+        self.assertEqual(url_match.group(0), "https://example.com/article/123")
+
+    def test_no_url_in_message(self):
+        """纯文字消息不应匹配到 URL"""
+        user_text = "我觉得知识管理很重要"
+        url_match = re.search(r"https?://\S+", user_text)
+        self.assertIsNone(url_match)
+
+    def test_input_type_url_with_opinion(self):
+        """URL + 想法应识别为 article（content_digest 场景）"""
+        msgs = [
+            {
+                "create_time": "1000",
+                "msg_type": "text",
+                "body": {"content": json.dumps({"text": "https://example.com 我觉得这个观点很有意思"})},
+                "sender": {"sender_type": "user"},
+                "message_id": "msg_1",
+            },
+            {
+                "create_time": "2000",
+                "msg_type": "text",
+                "body": {"content": json.dumps({"text": "这篇讲了XX，你最在意哪一点？"})},
+                "sender": {"sender_type": "app"},
+                "message_id": "msg_2",
+            },
+        ]
+        metrics = sn.analyze_conversation(msgs)
+        self.assertEqual(metrics["input_type"], "article")
 
 
 class TestSyncState(unittest.TestCase):
