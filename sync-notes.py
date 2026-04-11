@@ -54,6 +54,7 @@ REMOTE_DIGEST_REPORT = "/root/.openclaw/workspace/DIGEST_REPORT.json"
 REMOTE_MATURITY_REPORT = "/root/.openclaw/workspace/MATURITY_REPORT.json"
 REMOTE_THEME_REPORT = "/root/.openclaw/workspace/THEME_REPORT.json"
 REMOTE_CHALLENGE_REPORT = "/root/.openclaw/workspace/CHALLENGE_REPORT.json"
+REMOTE_EXPRESS_REPORT = "/root/.openclaw/workspace/EXPRESS_REPORT.json"
 
 
 # ── 飞书 API ─────────────────────────────────────────
@@ -362,6 +363,19 @@ def init_db():
             outcome         TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS express_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag             TEXT NOT NULL,
+            title           TEXT,
+            content         TEXT,
+            platform        TEXT DEFAULT 'xiaohongshu',
+            published_at    TEXT,
+            source_note_ids TEXT,
+            archived        BOOLEAN DEFAULT 0,
+            created_at      TEXT DEFAULT (datetime('now'))
+        )
+    """)
     conn.commit()
     return conn
 
@@ -506,7 +520,10 @@ def compute_maturity_level(conv_count, app_count, linked_count):
     else:
         maturity = "seed"
 
-    return {"maturity": maturity, "score": round(score, 2)}
+    # express_ready: growing 且 score >= 0.35，或 mature
+    express_ready = maturity == "mature" or (maturity == "growing" and round(score, 2) >= 0.35)
+
+    return {"maturity": maturity, "score": round(score, 2), "express_ready": express_ready}
 
 
 def update_tag_maturity(conn):
@@ -680,6 +697,188 @@ def build_challenge_report(conn):
         "candidate_count": len(candidates),
         "candidates": candidates,
     }
+
+
+def build_express_report(conn):
+    """生成可输出主题报告，聚合成熟标签下所有笔记的素材。"""
+    rows = conn.execute("""
+        SELECT tag, maturity, conversation_count, application_count, linked_note_count, score
+        FROM tag_maturity
+        WHERE maturity IN ('growing', 'mature')
+        ORDER BY score DESC
+    """).fetchall()
+
+    if not rows:
+        return None
+
+    topics = []
+    for tag, maturity, conv_count, app_count, linked_count, score in rows:
+        result = compute_maturity_level(conv_count, app_count, linked_count)
+        if not result["express_ready"]:
+            continue
+
+        # 找到该标签下所有笔记 ID
+        note_ids = [r[0] for r in conn.execute(
+            "SELECT note_id FROM note_tags WHERE tag = ?", (tag,)
+        ).fetchall()]
+
+        if not note_ids:
+            continue
+
+        # 从 Obsidian 笔记文件中读取素材
+        insights = []
+        scenarios = []
+        triggers = []
+        summaries = []
+        for note_id in note_ids:
+            note_content = _read_note_content(note_id)
+            if not note_content:
+                continue
+            # 提取洞察（支持两种格式：「**洞察：** xxx」和「## 洞察\n> xxx」）
+            m = re.search(r"洞察[：:]\s*(.+?)(?:\n|$)", note_content)
+            if m and m.group(1).strip() != "未提取到洞察" and m.group(1).strip() != ">":
+                insights.append(m.group(1).strip())
+            else:
+                m = re.search(r"##\s*洞察\s*\n>\s*(.+?)(?:\n|$)", note_content)
+                if m:
+                    insights.append(m.group(1).strip())
+            # 提取应用场景
+            m = re.search(r"(?:##\s*)?个人应用场景\s*\n(.+?)(?:\n|$)", note_content)
+            if m and "待补充" not in m.group(1):
+                scenarios.append(m.group(1).strip())
+            # 提取原始触发
+            m = re.search(r"(?:##\s*)?原始触发\s*\n(.+?)(?:\n|$)", note_content)
+            if m:
+                triggers.append(m.group(1).strip())
+            # 提取追问摘要
+            m = re.search(r"(?:##\s*)?追问摘要\s*\n(.+?)(?:\n|$)", note_content)
+            if m:
+                summaries.append(m.group(1).strip())
+
+        if not insights:
+            continue
+
+        topics.append({
+            "tag": tag,
+            "maturity": maturity,
+            "score": score,
+            "note_count": len(note_ids),
+            "insights": insights,
+            "scenarios": scenarios,
+            "triggers": triggers,
+            "summaries": summaries,
+        })
+
+    if not topics:
+        return None
+
+    return {
+        "updated_at": datetime.now().isoformat(),
+        "express_ready_count": len(topics),
+        "topics": topics,
+    }
+
+
+def log_express(conn, tag, title, content, platform="xiaohongshu"):
+    """记录一次输出到 express_log 表。返回插入的 id。"""
+    # 找到该标签下的笔记 ID
+    note_ids = [r[0] for r in conn.execute(
+        "SELECT note_id FROM note_tags WHERE tag = ?", (tag,)
+    ).fetchall()]
+
+    now = datetime.now().isoformat()
+    cursor = conn.execute("""
+        INSERT INTO express_log (tag, title, content, platform, published_at, source_note_ids)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (tag, title, content, platform, now, json.dumps(note_ids)))
+    conn.commit()
+    logger.info(f"Express 输出已记录: [{tag}] {title}")
+    return cursor.lastrowid
+
+
+def archive_express_notes(conn):
+    """将未归档的 express_log 记录生成 Obsidian 笔记，闭合 CODE 循环。"""
+    rows = conn.execute("""
+        SELECT id, tag, title, content, platform, published_at, source_note_ids
+        FROM express_log WHERE archived = 0
+    """).fetchall()
+
+    if not rows:
+        return 0
+
+    archived_count = 0
+    for row_id, tag, title, content, platform, published_at, source_note_ids_json in rows:
+        try:
+            source_ids = json.loads(source_note_ids_json) if source_note_ids_json else []
+        except (json.JSONDecodeError, TypeError):
+            source_ids = []
+
+        # 生成 Obsidian 笔记
+        pub_date = published_at[:10] if published_at else datetime.now().strftime("%Y-%m-%d")
+        safe_title = re.sub(r'[\\/*?"<>|]', '', title or tag)[:50]
+        filename = f"{pub_date}-express-{safe_title}.md"
+
+        # 构建关联笔记链接
+        related_links = []
+        for sid in source_ids:
+            # 在 NOTE_DIR 中查找对应笔记文件名
+            for f in NOTE_DIR.glob("*.md"):
+                try:
+                    if sid in f.read_text(encoding="utf-8"):
+                        stem = f.stem
+                        related_links.append(f"- [[{stem}]]")
+                        break
+                except Exception:
+                    continue
+
+        note_content = f"""---
+date: {pub_date}
+type: express
+platform: {platform}
+source_tag: {tag}
+source_notes: {json.dumps(source_ids)}
+---
+
+# {title or tag}
+
+## 发布内容
+
+{content or '（内容未记录）'}
+
+## 来源笔记
+
+{chr(10).join(related_links) if related_links else '（无关联笔记）'}
+
+## 发布信息
+
+- 平台：{platform}
+- 发布时间：{published_at or '未记录'}
+"""
+
+        note_path = NOTE_DIR / filename
+        note_path.write_text(note_content, encoding="utf-8")
+        logger.info(f"Express 归档笔记已生成: {filename}")
+
+        conn.execute("UPDATE express_log SET archived = 1 WHERE id = ?", (row_id,))
+        archived_count += 1
+
+    conn.commit()
+    return archived_count
+
+
+def _read_note_content(note_id):
+    """从 Obsidian 笔记目录中读取笔记内容。按 note_id 匹配文件名。"""
+    if not NOTE_DIR.exists():
+        return None
+    for f in NOTE_DIR.glob("*.md"):
+        try:
+            content = f.read_text(encoding="utf-8")
+            # frontmatter 中包含 note_id
+            if note_id in content:
+                return content
+        except Exception:
+            continue
+    return None
 
 
 def build_digest_report(conn):
@@ -1154,6 +1353,23 @@ def sync():
     else:
         logger.info("暂无挑战候选")
 
+    # ── Express 输出报告（V4 Plan 12）──
+    logger.info("检查可输出主题...")
+    express_report = build_express_report(conn)
+    if express_report:
+        express_json = json.dumps(express_report, ensure_ascii=False, indent=2)
+        logger.info(f"EXPRESS_REPORT: {express_report['express_ready_count']} 个主题可输出")
+        if upload_file_to_server(express_json, REMOTE_EXPRESS_REPORT):
+            logger.info("EXPRESS_REPORT.json 已上传到服务器")
+    else:
+        logger.info("暂无可输出主题")
+
+    # ── Express 输出归档（V4 Plan 14）──
+    logger.info("检查待归档的输出...")
+    archived = archive_express_notes(conn)
+    if archived:
+        logger.info(f"已归档 {archived} 条输出为 Obsidian 笔记")
+
     conn.close()
 
     # ── 上传统计到服务器 ──
@@ -1173,6 +1389,12 @@ def main():
         show_themes()
     elif "--challenges" in sys.argv:
         show_challenges()
+    elif "--express" in sys.argv:
+        show_express()
+    elif "--express-done" in sys.argv:
+        express_done()
+    elif "--express-history" in sys.argv:
+        show_express_history()
     else:
         sync()
 
@@ -1308,6 +1530,105 @@ def show_challenges():
     if not candidates and not challenged:
         print("  暂无可挑战的想法（需要标签成熟度达到「生长中」以上）")
         print()
+
+
+def show_express():
+    """显示可输出的主题及素材。"""
+    if not DB_PATH.exists():
+        print("还没有数据。先运行 python3 sync-notes.py 同步一次。")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    report = build_express_report(conn)
+    conn.close()
+
+    if not report:
+        print("暂无可输出的主题（需要标签成熟度达到 growing 且 score >= 0.35）。")
+        return
+
+    print("=" * 40)
+    print("✍️  可输出主题")
+    print("=" * 40)
+    print()
+    maturity_icons = {"seed": "🌱", "growing": "🌿", "mature": "🌳"}
+    for i, topic in enumerate(report["topics"], 1):
+        icon = maturity_icons.get(topic["maturity"], "?")
+        print(f"  {i}. {icon} {topic['tag']}（{topic['note_count']} 条笔记，分数 {topic['score']:.1f}）")
+        print(f"     洞察：")
+        for insight in topic["insights"]:
+            print(f"       - {insight}")
+        if topic["scenarios"]:
+            print(f"     场景：")
+            for s in topic["scenarios"]:
+                print(f"       - {s}")
+        print()
+
+
+def express_done():
+    """标记一个主题已手动发布，记录到 express_log 并归档。"""
+    # 从 sys.argv 中找 --express-done 后面的参数
+    try:
+        idx = sys.argv.index("--express-done")
+        tag = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
+    except (ValueError, IndexError):
+        tag = None
+
+    if not tag:
+        print("用法: python3 sync-notes.py --express-done <标签名>")
+        print("  例: python3 sync-notes.py --express-done 知识管理")
+        return
+
+    if not DB_PATH.exists():
+        print("还没有数据。先运行 python3 sync-notes.py 同步一次。")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+
+    # 检查标签是否存在
+    exists = conn.execute(
+        "SELECT 1 FROM tag_maturity WHERE tag = ?", (tag,)
+    ).fetchone()
+    if not exists:
+        print(f"标签「{tag}」不存在。")
+        conn.close()
+        return
+
+    # 交互式输入标题和内容（可选）
+    title = input(f"输入发布标题（回车跳过）: ").strip() or f"{tag}分享"
+    content = input(f"输入发布内容摘要（回车跳过）: ").strip() or None
+
+    row_id = log_express(conn, tag, title, content)
+    archived = archive_express_notes(conn)
+    conn.close()
+
+    print(f"✅ 已记录输出（id={row_id}），归档了 {archived} 条笔记")
+
+
+def show_express_history():
+    """显示输出历史。"""
+    if not DB_PATH.exists():
+        print("还没有数据。先运行 python3 sync-notes.py 同步一次。")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    rows = conn.execute("""
+        SELECT id, tag, title, platform, published_at, archived
+        FROM express_log ORDER BY created_at DESC
+    """).fetchall()
+    conn.close()
+
+    if not rows:
+        print("还没有输出记录。用 --express-done <标签名> 记录一次输出。")
+        return
+
+    print("=" * 50)
+    print("📤 输出历史")
+    print("=" * 50)
+    for row_id, tag, title, platform, published_at, archived in rows:
+        status = "✅ 已归档" if archived else "⏳ 待归档"
+        pub_date = published_at[:10] if published_at else "未知"
+        print(f"  #{row_id} [{pub_date}] {tag} → {title} ({platform}) {status}")
+    print()
 
 
 if __name__ == "__main__":

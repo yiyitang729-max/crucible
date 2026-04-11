@@ -855,5 +855,299 @@ class TestCognitiveChallenge(unittest.TestCase):
         self.assertIsNone(report)
 
 
+class TestExpressReady(unittest.TestCase):
+    """测试 express_ready 标记和 Express 报告"""
+
+    def test_express_ready_growing_high_score(self):
+        """growing + score >= 0.35 → express_ready"""
+        result = sn.compute_maturity_level(conv_count=3, app_count=1, linked_count=1)
+        self.assertEqual(result["maturity"], "growing")
+        self.assertTrue(result["express_ready"])
+
+    def test_express_ready_mature(self):
+        """mature → express_ready"""
+        result = sn.compute_maturity_level(conv_count=5, app_count=3, linked_count=3)
+        self.assertEqual(result["maturity"], "mature")
+        self.assertTrue(result["express_ready"])
+
+    def test_not_express_ready_seed(self):
+        """seed → not express_ready"""
+        result = sn.compute_maturity_level(conv_count=1, app_count=0, linked_count=0)
+        self.assertEqual(result["maturity"], "seed")
+        self.assertFalse(result["express_ready"])
+
+    def test_not_express_ready_growing_low_score(self):
+        """growing 但 score < 0.35 → not express_ready"""
+        result = sn.compute_maturity_level(conv_count=2, app_count=0, linked_count=0)
+        self.assertEqual(result["maturity"], "growing")
+        # score = 2/5 * 0.4 = 0.16, < 0.35
+        self.assertFalse(result["express_ready"])
+
+    def test_express_ready_growing_with_application(self):
+        """growing + 有应用场景 → score 够高 → express_ready"""
+        result = sn.compute_maturity_level(conv_count=1, app_count=1, linked_count=1)
+        self.assertEqual(result["maturity"], "growing")
+        # score = 0.08 + 0.117 + 0.083 = ~0.28 -- hmm let me check
+        # conv: 1/5 * 0.4 = 0.08, app: 1/3 * 0.35 = 0.117, link: 1/3 * 0.25 = 0.083
+        # total = 0.28 < 0.35 → not express_ready
+        self.assertFalse(result["express_ready"])
+
+    def test_express_ready_boundary(self):
+        """growing + score 刚好 >= 0.35 → express_ready"""
+        # conv=3: 3/5*0.4=0.24, app=1: 1/3*0.35=0.117, link=0: 0
+        # total = 0.357 → 0.36 >= 0.35 → express_ready
+        result = sn.compute_maturity_level(conv_count=3, app_count=1, linked_count=0)
+        self.assertEqual(result["maturity"], "growing")
+        self.assertGreaterEqual(result["score"], 0.35)
+        self.assertTrue(result["express_ready"])
+
+
+class TestExpressReport(unittest.TestCase):
+    """测试 Express 报告生成"""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS tag_maturity (
+                tag TEXT PRIMARY KEY, maturity TEXT DEFAULT 'seed',
+                conversation_count INTEGER DEFAULT 0, application_count INTEGER DEFAULT 0,
+                linked_note_count INTEGER DEFAULT 0, score REAL DEFAULT 0.0, updated_at DATETIME
+            );
+            CREATE TABLE IF NOT EXISTS note_tags (
+                note_id TEXT, tag TEXT, tag_type TEXT, PRIMARY KEY (note_id, tag)
+            );
+        """)
+        # 创建临时笔记目录
+        self._tmp_dir = tempfile.mkdtemp()
+        self._orig_note_dir = sn.NOTE_DIR
+        sn.NOTE_DIR = Path(self._tmp_dir)
+
+    def tearDown(self):
+        sn.NOTE_DIR = self._orig_note_dir
+        import shutil
+        shutil.rmtree(self._tmp_dir, ignore_errors=True)
+
+    def _write_note(self, note_id, insight, scenario="待补充", trigger="某个想法"):
+        """写一个测试笔记文件"""
+        content = f"""---
+note_id: {note_id}
+type: insight
+tags: [crucible, 测试]
+---
+# {insight}
+
+## 原始触发
+{trigger}
+
+## 追问摘要
+经过追问深入了理解
+
+> **洞察：** {insight}
+
+## 个人应用场景
+{scenario}
+"""
+        (Path(self._tmp_dir) / f"{note_id[:20]}.md").write_text(content, encoding="utf-8")
+
+    def test_express_report_with_ready_topic(self):
+        """有 express_ready 标签 → 生成报告"""
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, conversation_count, application_count, score) VALUES (?, ?, ?, ?, ?)",
+            ("知识管理", "growing", 3, 1, 0.44)
+        )
+        for i in range(3):
+            nid = f"note_{i}"
+            self.conn.execute("INSERT INTO note_tags (note_id, tag, tag_type) VALUES (?, '知识管理', 'topic')", (nid,))
+            self._write_note(nid, f"洞察{i}", scenario="在工作中应用" if i == 0 else "待补充")
+        self.conn.commit()
+
+        report = sn.build_express_report(self.conn)
+        self.assertIsNotNone(report)
+        self.assertEqual(report["express_ready_count"], 1)
+        topic = report["topics"][0]
+        self.assertEqual(topic["tag"], "知识管理")
+        self.assertEqual(len(topic["insights"]), 3)
+        self.assertEqual(len(topic["scenarios"]), 1)
+
+    def test_express_report_no_ready_topics(self):
+        """没有 express_ready 标签 → 返回 None"""
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, conversation_count, application_count, score) VALUES (?, ?, ?, ?, ?)",
+            ("新话题", "seed", 1, 0, 0.08)
+        )
+        self.conn.commit()
+
+        report = sn.build_express_report(self.conn)
+        self.assertIsNone(report)
+
+    def test_express_report_empty_db(self):
+        """空数据库 → 返回 None"""
+        report = sn.build_express_report(self.conn)
+        self.assertIsNone(report)
+
+    def test_express_report_skips_low_score_growing(self):
+        """growing 但 score 低 → 不进入报告"""
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, conversation_count, application_count, score) VALUES (?, ?, ?, ?, ?)",
+            ("新方向", "growing", 2, 0, 0.16)
+        )
+        self.conn.execute("INSERT INTO note_tags (note_id, tag, tag_type) VALUES ('n1', '新方向', 'topic')")
+        self._write_note("n1", "一个洞察")
+        self.conn.commit()
+
+        report = sn.build_express_report(self.conn)
+        self.assertIsNone(report)
+
+
+class TestExpressLog(unittest.TestCase):
+    """测试 Express 输出记录"""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS tag_maturity (
+                tag TEXT PRIMARY KEY, maturity TEXT DEFAULT 'seed',
+                conversation_count INTEGER DEFAULT 0, application_count INTEGER DEFAULT 0,
+                linked_note_count INTEGER DEFAULT 0, score REAL DEFAULT 0.0, updated_at DATETIME
+            );
+            CREATE TABLE IF NOT EXISTS note_tags (
+                note_id TEXT, tag TEXT, tag_type TEXT, PRIMARY KEY (note_id, tag)
+            );
+            CREATE TABLE IF NOT EXISTS express_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, tag TEXT NOT NULL,
+                title TEXT, content TEXT, platform TEXT DEFAULT 'xiaohongshu',
+                published_at TEXT, source_note_ids TEXT,
+                archived BOOLEAN DEFAULT 0, created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+
+    def test_log_express_basic(self):
+        """记录一次输出"""
+        self.conn.execute("INSERT INTO note_tags VALUES ('n1', '知识管理', 'topic')")
+        self.conn.execute("INSERT INTO note_tags VALUES ('n2', '知识管理', 'topic')")
+        self.conn.commit()
+
+        row_id = sn.log_express(self.conn, "知识管理", "我的知识管理心得", "正文内容")
+        self.assertIsNotNone(row_id)
+
+        row = self.conn.execute("SELECT * FROM express_log WHERE id = ?", (row_id,)).fetchone()
+        self.assertEqual(row[1], "知识管理")  # tag
+        self.assertEqual(row[2], "我的知识管理心得")  # title
+        self.assertEqual(row[4], "xiaohongshu")  # platform
+        source_ids = json.loads(row[6])
+        self.assertEqual(set(source_ids), {"n1", "n2"})
+
+    def test_log_express_no_notes(self):
+        """标签下无笔记也能记录"""
+        row_id = sn.log_express(self.conn, "新标签", "标题", "内容")
+        self.assertIsNotNone(row_id)
+        row = self.conn.execute("SELECT source_note_ids FROM express_log WHERE id = ?", (row_id,)).fetchone()
+        self.assertEqual(json.loads(row[0]), [])
+
+    def test_multiple_express_logs(self):
+        """同一标签可以多次输出"""
+        sn.log_express(self.conn, "知识管理", "第一篇", "内容1")
+        sn.log_express(self.conn, "知识管理", "第二篇", "内容2")
+        count = self.conn.execute("SELECT COUNT(*) FROM express_log").fetchone()[0]
+        self.assertEqual(count, 2)
+
+
+class TestExpressArchive(unittest.TestCase):
+    """测试 Express 输出归档为 Obsidian 笔记"""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS note_tags (
+                note_id TEXT, tag TEXT, tag_type TEXT, PRIMARY KEY (note_id, tag)
+            );
+            CREATE TABLE IF NOT EXISTS express_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, tag TEXT NOT NULL,
+                title TEXT, content TEXT, platform TEXT DEFAULT 'xiaohongshu',
+                published_at TEXT, source_note_ids TEXT,
+                archived BOOLEAN DEFAULT 0, created_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        self._tmp_dir = tempfile.mkdtemp()
+        self._orig_note_dir = sn.NOTE_DIR
+        sn.NOTE_DIR = Path(self._tmp_dir)
+
+    def tearDown(self):
+        sn.NOTE_DIR = self._orig_note_dir
+        import shutil
+        shutil.rmtree(self._tmp_dir, ignore_errors=True)
+
+    def test_archive_creates_note(self):
+        """归档生成 Obsidian 笔记文件"""
+        self.conn.execute("""
+            INSERT INTO express_log (tag, title, content, platform, published_at, source_note_ids, archived)
+            VALUES ('知识管理', '我的心得', '正文内容blah', 'xiaohongshu', '2026-04-12T10:00:00', '["n1","n2"]', 0)
+        """)
+        self.conn.commit()
+
+        archived = sn.archive_express_notes(self.conn)
+        self.assertEqual(archived, 1)
+
+        # 检查文件
+        files = list(Path(self._tmp_dir).glob("*express*.md"))
+        self.assertEqual(len(files), 1)
+        content = files[0].read_text(encoding="utf-8")
+        self.assertIn("type: express", content)
+        self.assertIn("我的心得", content)
+        self.assertIn("正文内容blah", content)
+        self.assertIn("platform: xiaohongshu", content)
+
+    def test_archive_marks_as_archived(self):
+        """归档后 archived 标记为 1"""
+        self.conn.execute("""
+            INSERT INTO express_log (tag, title, content, published_at, source_note_ids, archived)
+            VALUES ('测试', '标题', '内容', '2026-04-12T10:00:00', '[]', 0)
+        """)
+        self.conn.commit()
+
+        sn.archive_express_notes(self.conn)
+        row = self.conn.execute("SELECT archived FROM express_log").fetchone()
+        self.assertEqual(row[0], 1)
+
+    def test_archive_skips_already_archived(self):
+        """已归档的不重复归档"""
+        self.conn.execute("""
+            INSERT INTO express_log (tag, title, content, published_at, source_note_ids, archived)
+            VALUES ('测试', '标题', '内容', '2026-04-12T10:00:00', '[]', 1)
+        """)
+        self.conn.commit()
+
+        archived = sn.archive_express_notes(self.conn)
+        self.assertEqual(archived, 0)
+
+    def test_archive_no_records(self):
+        """无记录时返回 0"""
+        archived = sn.archive_express_notes(self.conn)
+        self.assertEqual(archived, 0)
+
+    def test_archive_with_source_links(self):
+        """归档笔记包含来源笔记链接"""
+        # 创建一个源笔记
+        source_content = """---
+note_id: src_note_1
+type: insight
+---
+# 测试洞察
+"""
+        (Path(self._tmp_dir) / "src_note_1.md").write_text(source_content, encoding="utf-8")
+
+        self.conn.execute("""
+            INSERT INTO express_log (tag, title, content, published_at, source_note_ids, archived)
+            VALUES ('测试', '标题', '内容', '2026-04-12T10:00:00', '["src_note_1"]', 0)
+        """)
+        self.conn.commit()
+
+        sn.archive_express_notes(self.conn)
+
+        files = list(Path(self._tmp_dir).glob("*express*.md"))
+        content = files[0].read_text(encoding="utf-8")
+        self.assertIn("[[src_note_1]]", content)
+
+
 if __name__ == "__main__":
     unittest.main()

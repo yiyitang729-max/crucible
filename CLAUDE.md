@@ -45,7 +45,10 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 - [x] 正式设计文档 v0.2（2026-04-02）→ `设计文档_2026-04-02.md`
 - [x] 实现计划
 - [x] V1 开发执行
-- [ ] V2 开发执行 ← **当前位置**
+- [x] V2 开发执行
+- [x] V1+V2 手动测试（13 用例，详见 `测试记录_2026-04-11.md`）
+- [x] V3 开发执行
+- [x] V4 开发执行（Plan 12 + 14 完成，Plan 13 待独立部署）← **当前位置**
 
 ## V1 实现计划（已完成）
 
@@ -61,6 +64,18 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 - [x] **Plan 7**：收藏加工引擎（DIGEST_REPORT + /pending + /digest + HEARTBEAT 主动提醒）
 - [x] **Plan 8**：链接内容抓取（web_fetch + browser fallback）
 
+## V3 实现计划（已完成）
+
+- [x] **Plan 9**：Diagnose — 知识成熟度评分（tag_maturity 表 + seed/growing/mature 三级）
+- [x] **Plan 10**：Connect — 主题检测 + 碎片聚合（3+ 条笔记自动识别主题，按 score 排序）
+- [x] **Plan 11**：Forge — 认知挑战层（themes 接入 sync 流程）
+
+## V4 实现计划
+
+- [x] **Plan 12**：成熟触发 + 草稿生成（express_ready 阈值 + EXPRESS_REPORT + /express 指令 + XHS 草稿）
+- [ ] **Plan 13**：小红书自动发布（xiaohongshu-mcp 已部署但未集成，待 NanoBot 独立部署后实现）
+- [x] **Plan 14**：输出归档（express_log 表 + 归档为 Obsidian 笔记 + --express-done CLI）
+
 ## 开发规范
 
 1. **每次修改都必须 commit + push**，并更新 CLAUDE.md 的进度记录
@@ -71,7 +86,7 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 6. **使用 worktree 开多个分支**，每个分支代表一种技术方案，分支间不要互相依赖
 7. **每次修改必须 commit + push 到对应 worktree 的分支上**
 
-## 测试覆盖（test_sync_notes.py，共 45 个测试）
+## 测试覆盖（test_sync_notes.py，共 84 个测试）
 
 ### 单元测试（不依赖网络）
 
@@ -94,10 +109,28 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 | 收藏消化 | 报告生成、空报告处理、status 过滤 | 用例 9 |
 | 同步状态 | 默认值、保存/读取 | 用例 11 |
 
+### V3 测试（知识成熟度 + 主题检测）
+
+| 模块 | 测试内容 |
+|------|---------|
+| 知识成熟度 | seed/growing/mature 三级计算、tag_maturity 表结构、从 DB 数据更新成熟度 |
+| 主题检测 | 3+ 条笔记识别主题、2 条不算主题、按 score 排序、空主题处理 |
+
+### V4 测试（Express 输出 + 归档）
+
+| 模块 | 测试内容 |
+|------|---------|
+| Express Ready | express_ready 标记：growing 高分、mature、seed、growing 低分、边界值 |
+| Express 报告 | 有 ready 标签生成报告、无 ready 返回 None、空 DB、低分跳过 |
+| Express 记录 | 基本记录、无笔记标签记录、同标签多次输出 |
+| Express 归档 | 生成 Obsidian 笔记、archived 标记更新、已归档跳过、空记录、来源笔记链接 |
+
 运行命令：`python3 -m unittest test_sync_notes -v`
 
 ## 遗留问题（不影响开发启动）
 
 - [ ] 产品名称：Crucible 是否最终确定？
 - [ ] Obsidian Vault 路径（用户本地路径，开发时用环境变量 `OBSIDIAN_VAULT_PATH` 配置）
-- [ ] Express 阶段（V3）交互设计细节，待 V1 验收后讨论
+- [ ] Plan 13 小红书自动发布：xiaohongshu-mcp 已部署在服务器，待 NanoBot 独立部署后集成
+- [ ] 笔记质量分层（complete/draft/seed），与 V3 成熟度衔接
+- [ ] SOUL.md 提前收尾识别能力受限于模型（Haiku），可能需要更强模型
