@@ -9,6 +9,7 @@ Crucible 笔记同步 + 评估入库脚本
 """
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -16,6 +17,21 @@ import sys
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# ── 日志配置 ─────────────────────────────────────────
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / f"sync-{datetime.now().strftime('%Y-%m-%d')}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("crucible")
 
 # ── 配置 ──────────────────────────────────────────────
 APP_ID = "cli_a945df04abb8dbcd"
@@ -443,7 +459,7 @@ def upload_file_to_server(local_content, remote_path):
         ], capture_output=True, timeout=10)
         return True
     except Exception as e:
-        print(f"⚠ 上传失败: {e}")
+        logger.warning(f"上传失败: {e}")
         return False
     finally:
         os.unlink(tmp_path)
@@ -664,9 +680,9 @@ def upload_stats_to_server(stats_md):
             f"sudo cp /tmp/crucible-stats.md {REMOTE_STATS}",
         ], capture_output=True, timeout=10)
 
-        print("✓ 统计已上传到服务器")
+        logger.info("统计已上传到服务器")
     except Exception as e:
-        print(f"⚠ 统计上传失败（不影响本地数据）: {e}")
+        logger.warning(f"统计上传失败（不影响本地数据）: {e}")
     finally:
         os.unlink(tmp_path)
 
@@ -678,17 +694,17 @@ def sync():
     state = load_state()
     synced = set(state.get("synced_msg_ids", []))
 
-    print(f"Obsidian vault: {VAULT_PATH}")
-    print(f"笔记目录: {NOTE_DIR}")
-    print(f"数据库: {DB_PATH}")
-    print(f"已同步笔记: {len(synced)} 条\n")
+    logger.info(f"Obsidian vault: {VAULT_PATH}")
+    logger.info(f"笔记目录: {NOTE_DIR}")
+    logger.info(f"数据库: {DB_PATH}")
+    logger.info(f"已同步笔记: {len(synced)} 条")
 
     token = get_token()
-    print("✓ 获取飞书 token 成功")
+    logger.info("获取飞书 token 成功")
 
     # 拉取所有消息
     all_messages = fetch_all_messages(token)
-    print(f"✓ 拉取 {len(all_messages)} 条消息")
+    logger.info(f"拉取 {len(all_messages)} 条消息")
 
     # ── 笔记同步 ──
     new_notes = []
@@ -720,19 +736,19 @@ def sync():
                         break
             filepath.write_text(md, encoding="utf-8")
             synced.add(msg_id)
-            print(f"  📝 {filepath.name}")
+            logger.info(f"新增笔记: {filepath.name}")
 
         state["synced_msg_ids"] = list(synced)
         state["last_sync"] = datetime.now().isoformat()
         save_state(state)
-        print(f"\n✅ 新增 {len(new_notes)} 条笔记")
+        logger.info(f"新增 {len(new_notes)} 条笔记")
     else:
-        print("\n没有新笔记。")
+        logger.info("没有新笔记")
 
     # ── 对话分析 + 入库 ──
-    print("\n分析对话指标...")
+    logger.info("分析对话指标...")
     conversations = segment_conversations(all_messages)
-    print(f"✓ 识别出 {len(conversations)} 段对话")
+    logger.info(f"识别出 {len(conversations)} 段对话")
 
     conn = init_db()
     conv_count = 0
@@ -750,10 +766,10 @@ def sync():
             note_count += 1
 
     conn.commit()
-    print(f"✓ 写入 {conv_count} 条对话指标，{note_count} 条笔记指标")
+    logger.info(f"写入 {conv_count} 条对话指标，{note_count} 条笔记指标")
 
     # ── 收藏识别 + 入库（V2 Plan 6）──
-    print("\n识别收藏内容...")
+    logger.info("识别收藏内容...")
     bookmark_count = 0
     for conv_msgs in conversations:
         bot_msgs_in_conv = [m for m in conv_msgs if is_bot_msg(m)]
@@ -785,10 +801,10 @@ def sync():
                 break
 
     conn.commit()
-    print(f"✓ 识别 {bookmark_count} 条收藏内容")
+    logger.info(f"识别 {bookmark_count} 条收藏内容")
 
     # ── 标签入库（V2）──
-    print("\n处理标签...")
+    logger.info("处理标签...")
     tag_count = 0
     for msg_id, filename, md, note_fields in new_notes:
         tags = note_fields.get("tags", [])
@@ -810,18 +826,18 @@ def sync():
                 if msg_id_match and tags:
                     upsert_tags(conn, msg_id_match.group(1), tags)
     conn.commit()
-    print(f"✓ 处理 {tag_count} 个新标签")
+    logger.info(f"处理 {tag_count} 个新标签")
 
     # ── 构建 TAG_INDEX + 上传 ──
     tag_index = build_tag_index(conn)
     tag_index_json = json.dumps(tag_index, ensure_ascii=False, indent=2)
-    print(f"✓ TAG_INDEX: {len(tag_index['tags'])} 个标签，{len(tag_index['notes'])} 条笔记")
+    logger.info(f"TAG_INDEX: {len(tag_index['tags'])} 个标签，{len(tag_index['notes'])} 条笔记")
 
     if upload_file_to_server(tag_index_json, REMOTE_TAG_INDEX):
-        print("✓ TAG_INDEX.json 已上传到服务器")
+        logger.info("TAG_INDEX.json 已上传到服务器")
 
     # ── 关联笔记（双链）──
-    print("\n计算笔记关联...")
+    logger.info("计算笔记关联...")
     link_updates = 0
     for note_path in NOTE_DIR.glob("*.md"):
         content = note_path.read_text(encoding="utf-8")
@@ -869,18 +885,18 @@ def sync():
         )
 
     conn.commit()
-    print(f"✓ 更新 {link_updates} 条笔记的关联")
+    logger.info(f"更新 {link_updates} 条笔记的关联")
 
     # ── 生成收藏消化报告（V2 Plan 7）──
-    print("\n生成收藏消化报告...")
+    logger.info("生成收藏消化报告...")
     digest_report = build_digest_report(conn)
     if digest_report:
         report_json = json.dumps(digest_report, ensure_ascii=False, indent=2)
-        print(f"✓ DIGEST_REPORT: {digest_report['pending_count']} 条待消化，{len(digest_report['clusters'])} 个主题")
+        logger.info(f"DIGEST_REPORT: {digest_report['pending_count']} 条待消化，{len(digest_report['clusters'])} 个主题")
         if upload_file_to_server(report_json, REMOTE_DIGEST_REPORT):
-            print("✓ DIGEST_REPORT.json 已上传到服务器")
+            logger.info("DIGEST_REPORT.json 已上传到服务器")
     else:
-        print("  没有待消化收藏。")
+        logger.info("没有待消化收藏")
 
     conn.close()
 
