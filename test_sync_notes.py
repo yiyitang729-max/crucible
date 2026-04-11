@@ -520,5 +520,78 @@ class TestSyncState(unittest.TestCase):
             tmp.unlink(missing_ok=True)
 
 
+class TestTagMaturity(unittest.TestCase):
+    """测试知识成熟度"""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS conversation_metrics (
+                id TEXT PRIMARY KEY, created_at DATETIME, input_type TEXT,
+                turns INTEGER, completed BOOLEAN, has_application BOOLEAN,
+                user_msg_chars INTEGER, note_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS note_metrics (
+                note_id TEXT PRIMARY KEY, created_at DATETIME,
+                linked_count INTEGER DEFAULT 0, searched_hit INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS note_tags (
+                note_id TEXT, tag TEXT, tag_type TEXT, PRIMARY KEY (note_id, tag)
+            );
+            CREATE TABLE IF NOT EXISTS pending_digests (
+                id TEXT PRIMARY KEY, created_at DATETIME, content_url TEXT,
+                content_summary TEXT, tags TEXT, status TEXT DEFAULT 'pending',
+                reminded_at DATETIME, digested_at DATETIME, note_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS tag_maturity (
+                tag TEXT PRIMARY KEY, maturity TEXT DEFAULT 'seed',
+                conversation_count INTEGER DEFAULT 0, application_count INTEGER DEFAULT 0,
+                linked_note_count INTEGER DEFAULT 0, score REAL DEFAULT 0.0,
+                updated_at DATETIME
+            );
+        """)
+
+    def test_tag_maturity_table_exists(self):
+        """tag_maturity 表存在且字段正确"""
+        cursor = self.conn.execute("PRAGMA table_info(tag_maturity)")
+        columns = {row[1] for row in cursor.fetchall()}
+        self.assertIn("tag", columns)
+        self.assertIn("maturity", columns)
+        self.assertIn("conversation_count", columns)
+        self.assertIn("application_count", columns)
+        self.assertIn("linked_note_count", columns)
+        self.assertIn("score", columns)
+        self.assertIn("updated_at", columns)
+
+    def test_maturity_seed(self):
+        """只聊过 1 次、没有应用场景 → seed"""
+        result = sn.compute_maturity_level(conv_count=1, app_count=0, linked_count=0)
+        self.assertEqual(result["maturity"], "seed")
+        self.assertLessEqual(result["score"], 0.3)
+
+    def test_maturity_growing_by_conversations(self):
+        """聊过 2-3 次 → growing"""
+        result = sn.compute_maturity_level(conv_count=2, app_count=0, linked_count=0)
+        self.assertEqual(result["maturity"], "growing")
+        self.assertGreater(result["score"], 0.1)
+        self.assertLessEqual(result["score"], 0.7)
+
+    def test_maturity_growing_by_application(self):
+        """有 1 个应用场景 → growing"""
+        result = sn.compute_maturity_level(conv_count=1, app_count=1, linked_count=0)
+        self.assertEqual(result["maturity"], "growing")
+
+    def test_maturity_mature(self):
+        """多次追问 + 多个场景 + 多关联 → mature"""
+        result = sn.compute_maturity_level(conv_count=5, app_count=3, linked_count=3)
+        self.assertEqual(result["maturity"], "mature")
+        self.assertGreater(result["score"], 0.7)
+
+    def test_maturity_edge_not_mature_without_links(self):
+        """聊了很多次但没有关联笔记 → 不到 mature"""
+        result = sn.compute_maturity_level(conv_count=5, app_count=2, linked_count=0)
+        self.assertNotEqual(result["maturity"], "mature")
+
+
 if __name__ == "__main__":
     unittest.main()
