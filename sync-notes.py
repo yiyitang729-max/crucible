@@ -52,6 +52,8 @@ REMOTE_STATS = "/root/.openclaw/workspace/STATS.md"
 REMOTE_TAG_INDEX = "/root/.openclaw/workspace/TAG_INDEX.json"
 REMOTE_DIGEST_REPORT = "/root/.openclaw/workspace/DIGEST_REPORT.json"
 REMOTE_MATURITY_REPORT = "/root/.openclaw/workspace/MATURITY_REPORT.json"
+REMOTE_THEME_REPORT = "/root/.openclaw/workspace/THEME_REPORT.json"
+REMOTE_CHALLENGE_REPORT = "/root/.openclaw/workspace/CHALLENGE_REPORT.json"
 
 
 # ── 飞书 API ─────────────────────────────────────────
@@ -352,6 +354,14 @@ def init_db():
             updated_at      DATETIME
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS challenge_log (
+            note_id         TEXT PRIMARY KEY,
+            challenge_type  TEXT,
+            challenged_at   DATETIME,
+            outcome         TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -624,6 +634,51 @@ def build_theme_report(conn):
         "updated_at": datetime.now().isoformat(),
         "theme_count": len(report_themes),
         "themes": report_themes,
+    }
+
+
+def find_challenge_candidates(conn):
+    """
+    找到可以被认知挑战的笔记。
+    条件：所属标签成熟度 >= growing，且未被挑战过。
+    设计原则：种子阶段以鼓励为主，不挑战。
+    """
+    rows = conn.execute("""
+        SELECT DISTINCT nt.note_id, nt.tag, tm.maturity, tm.score
+        FROM note_tags nt
+        JOIN tag_maturity tm ON nt.tag = tm.tag
+        LEFT JOIN challenge_log cl ON nt.note_id = cl.note_id
+        WHERE tm.maturity IN ('growing', 'mature')
+          AND cl.note_id IS NULL
+        ORDER BY tm.score DESC
+    """).fetchall()
+
+    candidates = []
+    seen_notes = set()
+    for note_id, tag, maturity, score in rows:
+        if note_id in seen_notes:
+            continue
+        seen_notes.add(note_id)
+        candidates.append({
+            "note_id": note_id,
+            "tag": tag,
+            "maturity": maturity,
+            "score": score,
+        })
+
+    return candidates
+
+
+def build_challenge_report(conn):
+    """生成认知挑战候选报告。"""
+    candidates = find_challenge_candidates(conn)
+    if not candidates:
+        return None
+
+    return {
+        "updated_at": datetime.now().isoformat(),
+        "candidate_count": len(candidates),
+        "candidates": candidates,
     }
 
 
@@ -1077,6 +1132,28 @@ def sync():
     else:
         logger.info("没有标签数据，跳过成熟度计算")
 
+    # ── 主题聚合检测（V3 Plan 10）──
+    logger.info("检测可聚合主题...")
+    theme_report = build_theme_report(conn)
+    if theme_report:
+        theme_json = json.dumps(theme_report, ensure_ascii=False, indent=2)
+        logger.info(f"THEME_REPORT: {theme_report['theme_count']} 个可聚合主题")
+        if upload_file_to_server(theme_json, REMOTE_THEME_REPORT):
+            logger.info("THEME_REPORT.json 已上传到服务器")
+    else:
+        logger.info("暂无可聚合主题")
+
+    # ── 认知挑战候选（V3 Plan 11）──
+    logger.info("识别认知挑战候选...")
+    challenge_report = build_challenge_report(conn)
+    if challenge_report:
+        challenge_json = json.dumps(challenge_report, ensure_ascii=False, indent=2)
+        logger.info(f"CHALLENGE_REPORT: {challenge_report['candidate_count']} 条待挑战")
+        if upload_file_to_server(challenge_json, REMOTE_CHALLENGE_REPORT):
+            logger.info("CHALLENGE_REPORT.json 已上传到服务器")
+    else:
+        logger.info("暂无挑战候选")
+
     conn.close()
 
     # ── 上传统计到服务器 ──
@@ -1092,6 +1169,10 @@ def main():
         show_pending()
     elif "--maturity" in sys.argv:
         show_maturity()
+    elif "--themes" in sys.argv:
+        show_themes()
+    elif "--challenges" in sys.argv:
+        show_challenges()
     else:
         sync()
 
@@ -1162,6 +1243,71 @@ def show_maturity():
         icon = maturity_icons.get(maturity, "?")
         print(f"  {icon} {tag}（对话 {conv} 次，场景 {app} 个，分数 {score:.1f}）")
     print()
+
+
+def show_themes():
+    """显示可聚合的主题。"""
+    if not DB_PATH.exists():
+        print("还没有数据。先运行 python3 sync-notes.py 同步一次。")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    themes = detect_themes(conn)
+    conn.close()
+
+    if not themes:
+        print("暂无可聚合的主题（需要某个标签下有 3+ 条笔记）。")
+        return
+
+    maturity_icons = {"seed": "🌱", "growing": "🌿", "mature": "🌳"}
+    print("=" * 40)
+    print("🔗 可聚合主题")
+    print("=" * 40)
+    print()
+    for i, theme in enumerate(themes, 1):
+        icon = maturity_icons.get(theme["maturity"], "?")
+        print(f"  {i}. {icon} {theme['tag']}（{theme['note_count']} 条笔记，分数 {theme['score']:.1f}）")
+        print(f"     → 这些笔记可能在讲同一个底层观点，值得整合")
+    print()
+
+
+def show_challenges():
+    """显示可被认知挑战的笔记。"""
+    if not DB_PATH.exists():
+        print("还没有数据。先运行 python3 sync-notes.py 同步一次。")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    candidates = find_challenge_candidates(conn)
+
+    challenged = conn.execute("""
+        SELECT note_id, challenge_type, challenged_at, outcome
+        FROM challenge_log ORDER BY challenged_at DESC
+    """).fetchall()
+    conn.close()
+
+    print("=" * 40)
+    print("⚔️ 认知挑战")
+    print("=" * 40)
+    print()
+
+    if candidates:
+        print(f"【待挑战】{len(candidates)} 条想法可以被锻造：")
+        for i, c in enumerate(candidates, 1):
+            maturity_icon = "🌿" if c["maturity"] == "growing" else "🌳"
+            print(f"  {i}. {maturity_icon} [{c['tag']}] {c['note_id'][:20]}...")
+        print()
+
+    if challenged:
+        print(f"【已锻造】{len(challenged)} 条想法经过了挑战：")
+        for note_id, ctype, cat, outcome in challenged:
+            outcome_icon = "✅" if outcome == "strengthened" else "🔄"
+            print(f"  {outcome_icon} {note_id[:20]}... ({ctype}, {outcome})")
+        print()
+
+    if not candidates and not challenged:
+        print("  暂无可挑战的想法（需要标签成熟度达到「生长中」以上）")
+        print()
 
 
 if __name__ == "__main__":

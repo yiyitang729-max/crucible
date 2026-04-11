@@ -772,5 +772,88 @@ class TestThemeDetection(unittest.TestCase):
         self.assertIsNone(report)
 
 
+class TestCognitiveChallenge(unittest.TestCase):
+    """��试认知挑战（锻造）"""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS note_metrics (
+                note_id TEXT PRIMARY KEY, created_at DATETIME,
+                linked_count INTEGER DEFAULT 0, searched_hit INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS note_tags (
+                note_id TEXT, tag TEXT, tag_type TEXT, PRIMARY KEY (note_id, tag)
+            );
+            CREATE TABLE IF NOT EXISTS tag_maturity (
+                tag TEXT PRIMARY KEY, maturity TEXT DEFAULT 'seed',
+                conversation_count INTEGER DEFAULT 0, application_count INTEGER DEFAULT 0,
+                linked_note_count INTEGER DEFAULT 0, score REAL DEFAULT 0.0, updated_at DATETIME
+            );
+            CREATE TABLE IF NOT EXISTS challenge_log (
+                note_id TEXT PRIMARY KEY, challenge_type TEXT,
+                challenged_at DATETIME, outcome TEXT
+            );
+        """)
+
+    def test_challenge_log_table_exists(self):
+        """challenge_log 表存在"""
+        cursor = self.conn.execute("PRAGMA table_info(challenge_log)")
+        columns = {row[1] for row in cursor.fetchall()}
+        self.assertIn("note_id", columns)
+        self.assertIn("challenge_type", columns)
+        self.assertIn("challenged_at", columns)
+        self.assertIn("outcome", columns)
+
+    def test_find_challenge_candidates_growing(self):
+        """生长中的标签下的笔记 → 可被挑战"""
+        self.conn.execute("INSERT INTO tag_maturity (tag, maturity, score) VALUES ('远程办公', 'growing', 0.5)")
+        self.conn.execute("INSERT INTO note_metrics (note_id, created_at) VALUES ('n1', '2026-04-01')")
+        self.conn.execute("INSERT INTO note_tags (note_id, tag, tag_type) VALUES ('n1', '远程办公', 'topic')")
+        self.conn.commit()
+
+        candidates = sn.find_challenge_candidates(self.conn)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["note_id"], "n1")
+
+    def test_no_challenge_for_seed(self):
+        """种子阶段的笔记 → 不挑战"""
+        self.conn.execute("INSERT INTO tag_maturity (tag, maturity, score) VALUES ('新话题', 'seed', 0.1)")
+        self.conn.execute("INSERT INTO note_metrics (note_id, created_at) VALUES ('n1', '2026-04-01')")
+        self.conn.execute("INSERT INTO note_tags (note_id, tag, tag_type) VALUES ('n1', '新话题', 'topic')")
+        self.conn.commit()
+
+        candidates = sn.find_challenge_candidates(self.conn)
+        self.assertEqual(len(candidates), 0)
+
+    def test_no_challenge_for_already_challenged(self):
+        """已经被挑战过的笔记 → 不重复挑战"""
+        self.conn.execute("INSERT INTO tag_maturity (tag, maturity, score) VALUES ('远程办公', 'growing', 0.5)")
+        self.conn.execute("INSERT INTO note_metrics (note_id, created_at) VALUES ('n1', '2026-04-01')")
+        self.conn.execute("INSERT INTO note_tags (note_id, tag, tag_type) VALUES ('n1', '远程办公', 'topic')")
+        self.conn.execute("INSERT INTO challenge_log (note_id, challenge_type, challenged_at, outcome) VALUES ('n1', 'counterexample', '2026-04-05', 'strengthened')")
+        self.conn.commit()
+
+        candidates = sn.find_challenge_candidates(self.conn)
+        self.assertEqual(len(candidates), 0)
+
+    def test_build_challenge_report(self):
+        """生成挑战候选报告"""
+        self.conn.execute("INSERT INTO tag_maturity (tag, maturity, score) VALUES ('远程办公', 'growing', 0.5)")
+        self.conn.execute("INSERT INTO note_metrics (note_id, created_at) VALUES ('n1', '2026-04-01')")
+        self.conn.execute("INSERT INTO note_tags (note_id, tag, tag_type) VALUES ('n1', '远程办公', 'topic')")
+        self.conn.commit()
+
+        report = sn.build_challenge_report(self.conn)
+        self.assertIsNotNone(report)
+        self.assertEqual(report["candidate_count"], 1)
+        self.assertEqual(report["candidates"][0]["note_id"], "n1")
+
+    def test_build_challenge_report_empty(self):
+        """没有候选时返回 None"""
+        report = sn.build_challenge_report(self.conn)
+        self.assertIsNone(report)
+
+
 if __name__ == "__main__":
     unittest.main()
