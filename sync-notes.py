@@ -51,6 +51,7 @@ REMOTE_HOST = "ubuntu@106.54.167.30"
 REMOTE_STATS = "/root/.openclaw/workspace/STATS.md"
 REMOTE_TAG_INDEX = "/root/.openclaw/workspace/TAG_INDEX.json"
 REMOTE_DIGEST_REPORT = "/root/.openclaw/workspace/DIGEST_REPORT.json"
+REMOTE_MATURITY_REPORT = "/root/.openclaw/workspace/MATURITY_REPORT.json"
 
 
 # ── 飞书 API ─────────────────────────────────────────
@@ -996,6 +997,23 @@ def sync():
     else:
         logger.info("没有待消化收藏")
 
+    # ── 知识成熟度计算（V3 Plan 9）──
+    logger.info("计算知识成熟度...")
+    update_tag_maturity(conn)
+    maturity_report = build_maturity_report(conn)
+    if maturity_report:
+        maturity_json = json.dumps(maturity_report, ensure_ascii=False, indent=2)
+        logger.info(
+            f"MATURITY_REPORT: {maturity_report['total_tags']} 个标签 — "
+            f"seed:{maturity_report['distribution']['seed']} "
+            f"growing:{maturity_report['distribution']['growing']} "
+            f"mature:{maturity_report['distribution']['mature']}"
+        )
+        if upload_file_to_server(maturity_json, REMOTE_MATURITY_REPORT):
+            logger.info("MATURITY_REPORT.json 已上传到服务器")
+    else:
+        logger.info("没有标签数据，跳过成熟度计算")
+
     conn.close()
 
     # ── 上传统计到服务器 ──
@@ -1009,6 +1027,8 @@ def main():
         show_stats()
     elif "--pending" in sys.argv:
         show_pending()
+    elif "--maturity" in sys.argv:
+        show_maturity()
     else:
         sync()
 
@@ -1044,6 +1064,41 @@ def show_pending():
         if url:
             print(f"     {url}")
         print()
+
+
+def show_maturity():
+    """显示知识成熟度分布。"""
+    if not DB_PATH.exists():
+        print("还没有数据。先运行 python3 sync-notes.py 同步一次。")
+        return
+
+    conn = sqlite3.connect(str(DB_PATH))
+    rows = conn.execute("""
+        SELECT tag, maturity, conversation_count, application_count, score
+        FROM tag_maturity
+        ORDER BY score DESC
+    """).fetchall()
+    conn.close()
+
+    if not rows:
+        print("还没有成熟度数据。先同步一次。")
+        return
+
+    maturity_icons = {"seed": "🌱", "growing": "🌿", "mature": "🌳"}
+    dist = {"seed": 0, "growing": 0, "mature": 0}
+    for _, m, _, _, _ in rows:
+        dist[m] = dist.get(m, 0) + 1
+
+    print("=" * 40)
+    print("🧠 知识成熟度")
+    print("=" * 40)
+    print()
+    print(f"  🌱 种子：{dist['seed']}  🌿 生长中：{dist['growing']}  🌳 成熟：{dist['mature']}")
+    print()
+    for tag, maturity, conv, app, score in rows:
+        icon = maturity_icons.get(maturity, "?")
+        print(f"  {icon} {tag}（对话 {conv} 次，场景 {app} 个，分数 {score:.1f}）")
+    print()
 
 
 if __name__ == "__main__":
