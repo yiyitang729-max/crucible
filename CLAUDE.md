@@ -59,7 +59,7 @@ CODE 四阶段在后台运作，用户只感知「在和 AI 对话」。
 - [x] **Plan 5**：标签系统 + 笔记关联基础（TAG_INDEX + Obsidian 双链）
 - [x] **Plan 6**：收藏入库（bookmark 路由 + pending_digests）
 - [x] **Plan 7**：收藏加工引擎（DIGEST_REPORT + /pending + /digest + HEARTBEAT 主动提醒）
-- [x] **Plan 8**：链接内容抓取（Jina Reader API + fallback 提示）
+- [x] **Plan 8**：链接内容抓取（web_fetch + browser fallback）
 
 ## 开发规范
 
