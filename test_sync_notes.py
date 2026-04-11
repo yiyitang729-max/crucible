@@ -664,5 +664,113 @@ class TestTagMaturity(unittest.TestCase):
         self.assertIsNone(report)
 
 
+class TestThemeDetection(unittest.TestCase):
+    """测试碎片聚合（主题发现）"""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS note_metrics (
+                note_id TEXT PRIMARY KEY, created_at DATETIME,
+                linked_count INTEGER DEFAULT 0, searched_hit INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS note_tags (
+                note_id TEXT, tag TEXT, tag_type TEXT, PRIMARY KEY (note_id, tag)
+            );
+            CREATE TABLE IF NOT EXISTS tag_maturity (
+                tag TEXT PRIMARY KEY, maturity TEXT DEFAULT 'seed',
+                conversation_count INTEGER DEFAULT 0, application_count INTEGER DEFAULT 0,
+                linked_note_count INTEGER DEFAULT 0, score REAL DEFAULT 0.0, updated_at DATETIME
+            );
+            CREATE TABLE IF NOT EXISTS conversation_metrics (
+                id TEXT PRIMARY KEY, created_at DATETIME, input_type TEXT,
+                turns INTEGER, completed BOOLEAN, has_application BOOLEAN,
+                user_msg_chars INTEGER, note_id TEXT
+            );
+        """)
+
+    def test_detect_theme_with_3_notes(self):
+        """标签下有 3+ 条笔记 → 检测为主题"""
+        for i in range(3):
+            self.conn.execute(
+                "INSERT INTO note_metrics (note_id, created_at) VALUES (?, '2026-04-01')", (f"n{i}",)
+            )
+            self.conn.execute(
+                "INSERT INTO note_tags (note_id, tag, tag_type) VALUES (?, '知行合一', 'topic')", (f"n{i}",)
+            )
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, score) VALUES ('知行合一', 'growing', 0.5)"
+        )
+        self.conn.commit()
+
+        themes = sn.detect_themes(self.conn)
+        self.assertEqual(len(themes), 1)
+        self.assertEqual(themes[0]["tag"], "知行合一")
+        self.assertEqual(themes[0]["note_count"], 3)
+
+    def test_no_theme_with_2_notes(self):
+        """标签下只有 2 条笔记 → 不算主题"""
+        for i in range(2):
+            self.conn.execute(
+                "INSERT INTO note_metrics (note_id, created_at) VALUES (?, '2026-04-01')", (f"n{i}",)
+            )
+            self.conn.execute(
+                "INSERT INTO note_tags (note_id, tag, tag_type) VALUES (?, '新话题', 'topic')", (f"n{i}",)
+            )
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, score) VALUES ('新话题', 'seed', 0.1)"
+        )
+        self.conn.commit()
+
+        themes = sn.detect_themes(self.conn)
+        self.assertEqual(len(themes), 0)
+
+    def test_themes_sorted_by_score(self):
+        """主题按成熟度 score 降序排列"""
+        for tag, score, maturity in [("AI产品", 0.6, "growing"), ("远程办公", 0.8, "mature")]:
+            for i in range(3):
+                nid = f"{tag}_{i}"
+                self.conn.execute(
+                    "INSERT INTO note_metrics (note_id, created_at) VALUES (?, '2026-04-01')", (nid,)
+                )
+                self.conn.execute(
+                    "INSERT INTO note_tags (note_id, tag, tag_type) VALUES (?, ?, 'topic')", (nid, tag)
+                )
+            self.conn.execute(
+                "INSERT INTO tag_maturity (tag, maturity, score) VALUES (?, ?, ?)", (tag, maturity, score)
+            )
+        self.conn.commit()
+
+        themes = sn.detect_themes(self.conn)
+        self.assertEqual(len(themes), 2)
+        self.assertEqual(themes[0]["tag"], "远程办公")
+
+    def test_build_theme_report(self):
+        """生成主题报告"""
+        for i in range(4):
+            nid = f"n{i}"
+            self.conn.execute(
+                "INSERT INTO note_metrics (note_id, created_at) VALUES (?, '2026-04-01')", (nid,)
+            )
+            self.conn.execute(
+                "INSERT INTO note_tags (note_id, tag, tag_type) VALUES (?, '知行合一', 'topic')", (nid,)
+            )
+        self.conn.execute(
+            "INSERT INTO tag_maturity (tag, maturity, conversation_count, score) VALUES ('知行合一', 'growing', 4, 0.55)"
+        )
+        self.conn.commit()
+
+        report = sn.build_theme_report(self.conn)
+        self.assertIsNotNone(report)
+        self.assertEqual(report["theme_count"], 1)
+        self.assertEqual(report["themes"][0]["tag"], "知行合一")
+        self.assertIn("suggestion", report["themes"][0])
+
+    def test_build_theme_report_empty(self):
+        """没有主题时返回 None"""
+        report = sn.build_theme_report(self.conn)
+        self.assertIsNone(report)
+
+
 if __name__ == "__main__":
     unittest.main()

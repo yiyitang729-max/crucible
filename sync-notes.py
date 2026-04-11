@@ -564,6 +564,69 @@ def build_maturity_report(conn):
     }
 
 
+def detect_themes(conn, min_notes=3):
+    """
+    检测可聚合的主题。
+    条件：某个标签下有 min_notes 条以上笔记。
+    返回按 score 降序排列的主题列表。
+    """
+    rows = conn.execute("""
+        SELECT nt.tag, COUNT(DISTINCT nt.note_id) as note_count,
+               tm.maturity, tm.score
+        FROM note_tags nt
+        JOIN tag_maturity tm ON nt.tag = tm.tag
+        GROUP BY nt.tag
+        HAVING note_count >= ?
+        ORDER BY tm.score DESC
+    """, (min_notes,)).fetchall()
+
+    themes = []
+    for tag, note_count, maturity, score in rows:
+        note_ids = [r[0] for r in conn.execute(
+            "SELECT note_id FROM note_tags WHERE tag = ?", (tag,)
+        ).fetchall()]
+
+        themes.append({
+            "tag": tag,
+            "note_count": note_count,
+            "maturity": maturity,
+            "score": score,
+            "note_ids": note_ids,
+        })
+
+    return themes
+
+
+def build_theme_report(conn):
+    """生成主题聚合报告。"""
+    themes = detect_themes(conn)
+    if not themes:
+        return None
+
+    report_themes = []
+    for theme in themes:
+        maturity_label = {"seed": "🌱 种子", "growing": "🌿 生长中", "mature": "🌳 成熟"}.get(theme["maturity"], theme["maturity"])
+        suggestion = (
+            f"你在「{theme['tag']}」这个方向已经聊了 {theme['note_count']} 次，"
+            f"目前处于{maturity_label}阶段。"
+            f"要不要把这些想法整合成一个完整观点？"
+        )
+        report_themes.append({
+            "tag": theme["tag"],
+            "note_count": theme["note_count"],
+            "maturity": theme["maturity"],
+            "score": theme["score"],
+            "note_ids": theme["note_ids"],
+            "suggestion": suggestion,
+        })
+
+    return {
+        "updated_at": datetime.now().isoformat(),
+        "theme_count": len(report_themes),
+        "themes": report_themes,
+    }
+
+
 def build_digest_report(conn):
     """分析待消化收藏，按标签聚类，生成推荐报告。"""
     rows = conn.execute("""
